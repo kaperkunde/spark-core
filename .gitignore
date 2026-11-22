@@ -17,3 +17,12 @@ compile_commands.json
 .venv/
 venv/
 platformio.local.ini
+
+# Spark: local configuration with secrets (see .env.example)
+.env
+.env.*
+!.env.example
+*.db
+/host/.venv/
+/.spark-tools/
+/backups/
