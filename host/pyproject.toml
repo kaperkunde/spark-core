@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "spark-bridge"
+version = "1"
+description = "Spark Bridge (SparkBridge1): a SparkNode MeshCore room server <-> Discord"
+requires-python = ">=3.11"
+dependencies = [
+    "meshcore==2.3.19",
+    "discord.py>=2.4,<3",
+    "tzdata",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8", "pytest-asyncio>=0.23"]
+
+[project.scripts]
+spark-bridge = "spark_bridge.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
