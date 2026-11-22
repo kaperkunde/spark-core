@@ -5,8 +5,11 @@
 #
 # The .env file is gitignored; .env.example documents every key. SPARK_ENV_FILE=<path> picks a
 # different file (setup.sh --dry-run and CI use that). Values never appear in committed files.
+import datetime
+import hashlib
 import os
 import re
+import subprocess
 import sys
 
 Import("env")  # noqa: F821  (SCons global)
@@ -151,3 +154,80 @@ def strip(flag):
 env.Replace(BUILD_FLAGS=[f for f in (strip(x) for x in env.get("BUILD_FLAGS", [])) if f])  # noqa: F821
 env.Append(BUILD_FLAGS=["-D %s=%s" % (k, v) for k, v in sorted(flags.items())])  # noqa: F821
 print("Spark: %s firmware configured from %s" % (component, os.path.relpath(env_file, ROOT)))
+
+
+# ---- SparkNode build id -------------------------------------------------------------------------
+# "<git hash>[+]-<UTC yymmddHHMMSS>" in a generated header, so only HostLink.cpp recompiles. The id
+# is kept while the source (git commit + uncommitted changes) and the configuration stay the
+# same, so the separate `pio run` invocations of one build (firmware, UF2, DFU zip) agree, and
+# it changes with any of them. The node reports it (`get build`, `ver`); the updater reads it
+# from the image ("SPARK-BUILD <version> <id>") and checks it after an update.
+
+def git(*args):
+    try:
+        return subprocess.run(["git", "-C", ROOT] + list(args), capture_output=True, check=True).stdout
+    except Exception:  # noqa: BLE001
+        return b""
+
+
+def build_id():
+    head = git("rev-parse", "--short=8", "HEAD").decode().strip() or "nogit"
+    diff = git("diff", "HEAD", "--", ".", ":(exclude)host")
+    untracked = git("ls-files", "--others", "--exclude-standard", "--", "src", "examples", "variants", "lib",
+                    "spark", "boards")
+    fp = hashlib.sha256()
+    for part in (head.encode(), diff, untracked, repr(sorted(flags.items())).encode(),
+                 repr(env.get("BUILD_FLAGS", [])).encode()):  # noqa: F821
+        fp.update(part)
+        fp.update(b"\0")
+    fingerprint = fp.hexdigest()
+    gen = os.path.join(env.subst("$BUILD_DIR"), "spark_gen")  # noqa: F821
+    os.makedirs(gen, exist_ok=True)
+    cache = os.path.join(gen, "build_id.txt")
+    try:
+        with open(cache, encoding="utf-8") as f:
+            old_fp, old_id = f.read().split()
+        if old_fp == fingerprint:
+            return gen, old_id
+    except (OSError, ValueError):
+        pass
+    bid = "%s%s-%s" % (head, "+" if diff.strip() or untracked.strip() else "",
+                       datetime.datetime.now(datetime.timezone.utc).strftime("%y%m%d%H%M%S"))
+    with open(cache, "w", encoding="utf-8") as f:
+        f.write("%s %s\n" % (fingerprint, bid))
+    return gen, bid
+
+
+if component == "node":
+    gen_dir, bid = build_id()
+    header = os.path.join(gen_dir, "spark_build_id.h")
+    text = "#pragma once\n#define SPARK_BUILD_ID \"%s\"\n" % bid
+    try:
+        with open(header, encoding="utf-8") as f:
+            same = f.read() == text
+    except OSError:
+        same = False
+    if not same:
+        with open(header, "w", encoding="utf-8") as f:
+            f.write(text)
+    env.Append(CPPPATH=[gen_dir])  # noqa: F821
+    print("Spark: build id %s" % bid)
+
+    # `pio run -e <env> -t dfu_zip` -> firmware-dfu.zip next to firmware.hex: the application
+    # package for BLE OTA (spark-bridge update, or a phone with nRF Connect / nRF DFU).
+    def dfu_zip_action(source, target, env):  # noqa: ARG001
+        sd = env.BoardConfig().get("build.softdevice.sd_fwid", "0x0123")
+        nrfutil = os.path.join(env.PioPlatform().get_package_dir("tool-adafruit-nrfutil") or "",
+                               "adafruit-nrfutil.py")
+        env.Execute(" ".join(['"$PYTHONEXE"', '"%s"' % nrfutil, "dfu", "genpkg", "--dev-type", "0x0052",
+                              "--sd-req", sd, "--application", '"$BUILD_DIR/firmware.hex"',
+                              '"$BUILD_DIR/firmware-dfu.zip"']))
+
+    env.AddCustomTarget(  # noqa: F821
+        name="dfu_zip",
+        dependencies="$BUILD_DIR/firmware.hex",
+        actions=dfu_zip_action,
+        title="Create DFU zip",
+        description="adafruit-nrfutil genpkg: application package for BLE OTA",
+        always_build=True,
+    )

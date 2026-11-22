@@ -69,6 +69,19 @@ void SerialBLEInterface::onSecured(uint16_t connection_handle) {
       } else {
         BLE_DEBUG_PRINTLN("Failed to request connection parameter update: %lu", err_code);
       }
+#ifdef SPARK_SERVICE_CHANGED
+      // Once per boot, on the first secured link whose peer subscribed to Service Changed: tell
+      // the bonded central that the whole attribute table may have changed (new firmware, or a
+      // bootloader session at the same address), so it re-discovers instead of using its cache.
+      static bool service_changed_sent = false;
+      if (!service_changed_sent) {
+        uint16_t first = 0;
+        if (sd_ble_gatts_initial_user_handle_get(&first) == NRF_SUCCESS &&
+            sd_ble_gatts_service_changed(connection_handle, first, 0xFFFF) == NRF_SUCCESS) {
+          service_changed_sent = true;
+        }
+      }
+#endif
     } else {
       BLE_DEBUG_PRINTLN("onSecured: ignoring stale/duplicate callback");
     }
