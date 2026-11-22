@@ -203,7 +203,44 @@ bool parseChannelSend(const uint8_t* f, size_t len, ChannelSendCmd& c) {
   c.timestamp = get32(&f[3]);
   c.text = (const char*)&f[7];
   c.text_len = len - 7;
+  c.sender = nullptr;
+  c.sender_len = 0;
+  const void* nul = c.text_len ? memchr(c.text, 0, c.text_len) : nullptr;
+  if (nul) {
+    size_t at = (const char*)nul - c.text;
+    const char* s = c.text + at + 1;
+    size_t sl = c.text_len - at - 1;
+    const void* end = sl ? memchr(s, 0, sl) : nullptr;
+    if (end) sl = (const char*)end - s;
+    c.text_len = at;
+    if (sl) { c.sender = s; c.sender_len = sl; }
+  }
   return true;
+}
+
+size_t sanitizeSenderName(char* out, const char* in, size_t len) {
+  size_t n = 0;
+  bool space = false;
+  for (size_t i = 0; i < len && in && in[i]; i++) {
+    uint8_t ch = (uint8_t)in[i];
+    if (ch == ':') continue;
+    if (ch < 0x20 || ch == 0x7F || ch == ' ') { space = true; continue; }
+    if (space && n > 0 && n < MAX_SENDER_NAME) out[n++] = ' ';
+    space = false;
+    if (n >= MAX_SENDER_NAME) break;
+    out[n++] = (char)ch;
+  }
+  // a cut may end inside a multi-byte character: drop the partial sequence
+  size_t k = n;
+  while (k > 0 && (((uint8_t)out[k - 1]) & 0xC0) == 0x80) k--;   // continuation bytes
+  if (k > 0 && ((uint8_t)out[k - 1]) >= 0xC0) {
+    uint8_t lead = (uint8_t)out[k - 1];
+    size_t need = lead >= 0xF0 ? 4 : lead >= 0xE0 ? 3 : 2;
+    if (n - (k - 1) < need) n = k - 1;
+  }
+  while (n > 0 && out[n - 1] == ' ') n--;
+  out[n] = 0;
+  return n;
 }
 
 bool parseTxtSend(const uint8_t* f, size_t len, TxtSendCmd& c) {

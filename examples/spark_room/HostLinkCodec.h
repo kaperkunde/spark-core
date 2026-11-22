@@ -12,6 +12,7 @@ static const size_t MAX_FRAME       = 176;
 static const size_t MAX_CHAN_TEXT   = 160;   // whole "<name>: <text>" string
 static const size_t MAX_POST_TEXT   = 151;
 static const size_t MAX_CHAN_FRAME_TEXT = 165;  // 176 - 11 header bytes
+static const size_t MAX_SENDER_NAME = 31;  // node_name[32] / contact name[32] incl. NUL
 static const size_t PUBKEY_SIZE     = 32;
 static const size_t CONTACT_FRAME_SIZE     = 148;
 static const size_t DEVICE_INFO_FRAME_SIZE = 82;
@@ -77,8 +78,22 @@ size_t buildChannelMsg(uint8_t* out, int8_t snr_x4, uint8_t chan_idx, uint8_t pa
                        const char* text, size_t text_len);
 
 // ---- command parsers (payload includes the code byte) ----
-struct ChannelSendCmd { uint8_t txt_type, chan_idx; uint32_t timestamp; const char* text; size_t text_len; };
+// SEND_CHANNEL_TXT_MSG: code, txt_type, chan_idx, u32 timestamp, text[, 0x00, sender name].
+// The optional trailer (SparkNode1.2) is everything after the first NUL in the text field, up to
+// a second NUL or the frame end. sender_len is 0 when there is no trailer (or it is empty).
+struct ChannelSendCmd {
+  uint8_t txt_type, chan_idx; uint32_t timestamp;
+  const char* text; size_t text_len;
+  const char* sender; size_t sender_len;
+};
 bool parseChannelSend(const uint8_t* f, size_t len, ChannelSendCmd& c);
+
+// Make a host-supplied sender name safe as the "<name>: " head of a channel text: ':' is
+// dropped, control characters (newlines, tabs) become spaces, runs of spaces collapse, the
+// ends are trimmed, and the result is cut to MAX_SENDER_NAME bytes on a UTF-8 boundary.
+// Writes a NUL-terminated string (`out` needs MAX_SENDER_NAME+1 bytes); returns its length,
+// 0 if nothing is left (the caller then falls back to the node name).
+size_t sanitizeSenderName(char* out, const char* in, size_t len);
 struct TxtSendCmd { uint8_t txt_type, attempt; uint32_t timestamp; const uint8_t* dest6; const char* text; size_t text_len; };
 bool parseTxtSend(const uint8_t* f, size_t len, TxtSendCmd& c);
 

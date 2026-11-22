@@ -226,6 +226,89 @@ TEST(Parse, RejectsShortCommands) {
   EXPECT_FALSE(parseTxtSend(f, 8, t));
 }
 
+// ---- channel send with a sender name (SparkNode1.2 trailer) ----
+
+static std::string sanitize(const std::string& in) {
+  char out[MAX_SENDER_NAME + 1];
+  size_t n = sanitizeSenderName(out, in.data(), in.size());
+  EXPECT_EQ(n, strlen(out));
+  return std::string(out, n);
+}
+
+TEST(Golden, V10_ChannelSendWithSender) {
+  auto f = unhex("03000000f1536548616c6c6f00426164506972617465");
+  ChannelSendCmd c;
+  ASSERT_TRUE(parseChannelSend(f.data(), f.size(), c));
+  EXPECT_EQ(TS, c.timestamp);
+  EXPECT_EQ("Hallo", std::string(c.text, c.text_len));
+  ASSERT_NE(nullptr, c.sender);
+  EXPECT_EQ("BadPirate", std::string(c.sender, c.sender_len));
+  char name[MAX_SENDER_NAME + 1];
+  ASSERT_EQ(9u, sanitizeSenderName(name, c.sender, c.sender_len));
+  char out[MAX_CHAN_TEXT + 1];
+  size_t n = composeChannelText(out, name, c.text, c.text_len);
+  EXPECT_EQ("BadPirate: Hallo", std::string(out, n));
+}
+
+TEST(SenderName, V1WithoutTrailerHasNoSender) {
+  auto f = unhex("03000000f153655b726f62696e5d20726164696f20636865636b");
+  ChannelSendCmd c;
+  ASSERT_TRUE(parseChannelSend(f.data(), f.size(), c));
+  EXPECT_EQ(nullptr, c.sender);
+  EXPECT_EQ(0u, c.sender_len);
+  EXPECT_EQ(19u, c.text_len);
+}
+
+TEST(SenderName, EmptyTrailerAndSecondNul) {
+  std::vector<uint8_t> f = {3, 0, 0, 0, 0, 0, 0, 'h', 'i', 0};
+  ChannelSendCmd c;
+  ASSERT_TRUE(parseChannelSend(f.data(), f.size(), c));
+  EXPECT_EQ("hi", std::string(c.text, c.text_len));
+  EXPECT_EQ(0u, c.sender_len);   // "hi\0": no sender, node name is used
+  std::vector<uint8_t> g = {3, 0, 0, 0, 0, 0, 0, 'h', 'i', 0, 'A', 'n', 0, 'x'};
+  ASSERT_TRUE(parseChannelSend(g.data(), g.size(), c));
+  EXPECT_EQ("hi", std::string(c.text, c.text_len));
+  EXPECT_EQ("An", std::string(c.sender, c.sender_len));   // ends at the second NUL
+  std::vector<uint8_t> h = {3, 0, 0, 0, 0, 0, 0, 0, 'A', 'n'};
+  ASSERT_TRUE(parseChannelSend(h.data(), h.size(), c));
+  EXPECT_EQ(0u, c.text_len);
+  EXPECT_EQ("An", std::string(c.sender, c.sender_len));
+}
+
+TEST(SenderName, SanitizeDropsColonsAndNewlines) {
+  EXPECT_EQ("BadPirate", sanitize("BadPirate"));
+  EXPECT_EQ("Bad Pirate", sanitize("  Bad:\nPirate:  "));
+  EXPECT_EQ("a b c", sanitize("a\r\n\tb \x7f c"));
+  EXPECT_EQ("", sanitize(":::"));
+  EXPECT_EQ("", sanitize(" \n "));
+  EXPECT_EQ("", sanitize(""));
+  EXPECT_EQ("ab", sanitize(std::string("ab\0cd", 5)));   // stops at a NUL
+}
+
+TEST(SenderName, SanitizeCutsTo31BytesOnUtf8Boundary) {
+  EXPECT_EQ(std::string(31, 'x'), sanitize(std::string(40, 'x')));
+  // 15 x 2-byte chars = 30 bytes, a 16th would need bytes 31-32
+  std::string e;
+  for (int i = 0; i < 20; i++) e += "\xC3\xA9";
+  EXPECT_EQ(30u, sanitize(e).size());
+  // 30 ASCII + a 4-byte emoji: the emoji does not fit
+  EXPECT_EQ(std::string(30, 'a'), sanitize(std::string(30, 'a') + "\xF0\x9F\x98\x80"));
+  // 27 ASCII + emoji = 31 bytes: fits exactly
+  std::string fit = std::string(27, 'a') + "\xF0\x9F\x98\x80";
+  EXPECT_EQ(fit, sanitize(fit + "zz"));
+  // a space at the cut is trimmed
+  EXPECT_EQ(std::string(30, 'a'), sanitize(std::string(30, 'a') + " bcd"));
+}
+
+TEST(SenderName, ComposeWithLongestSenderKeeps160) {
+  std::string name = sanitize(std::string(40, 'N'));
+  std::string t(300, 't');
+  char out[MAX_CHAN_TEXT + 1];
+  size_t n = composeChannelText(out, name.c_str(), t.data(), t.size());
+  EXPECT_EQ(160u, n);
+  EXPECT_EQ(0, strncmp(out, (name + ": t").c_str(), name.size() + 3));
+}
+
 // ---- USB frame parser ----
 
 static UsbFrameParser::Result feedAll(UsbFrameParser& p, const std::vector<uint8_t>& v, uint32_t t = 0) {

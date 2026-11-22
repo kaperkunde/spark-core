@@ -414,12 +414,16 @@ void HostLink::cmdSendChannel(int t, const uint8_t* f, size_t len) {
   if (c.txt_type != 0) { err(t, ERR_CODE_UNSUPPORTED_CMD); return; }
   if (c.chan_idx != 0) { err(t, ERR_CODE_NOT_FOUND); return; }
 
-  // payload: u32 timestamp, u8 txt_type (0), "<node name>: <text>" cut to 160 bytes
+  // payload: u32 timestamp, u8 txt_type (0), "<sender>: <text>" cut to 160 bytes. The sender is
+  // the host-supplied name (frame trailer, sanitized) or else this node's name.
+  char sender[hl::MAX_SENDER_NAME + 1];
+  const char* name = _m->getNodePrefs()->node_name;
+  if (c.sender_len && hl::sanitizeSenderName(sender, c.sender, c.sender_len)) name = sender;
   uint8_t data[5 + hl::MAX_CHAN_TEXT + 1];
   uint32_t ts = c.timestamp ? c.timestamp : _m->getRTCClock()->getCurrentTime();
   memcpy(data, &ts, 4);
   data[4] = 0;
-  size_t n = hl::composeChannelText((char*)&data[5], _m->getNodePrefs()->node_name, c.text, c.text_len);
+  size_t n = hl::composeChannelText((char*)&data[5], name, c.text, c.text_len);
   mesh::Packet* pkt = _m->createGroupDatagram(PAYLOAD_TYPE_GRP_TXT, _public, data, 5 + n);
   if (!pkt) { err(t, ERR_CODE_TABLE_FULL); return; }
   // sendFlood marks the packet as seen, so a repeater's copy is not delivered back to us

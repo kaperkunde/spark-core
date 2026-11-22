@@ -23,7 +23,7 @@ HostLink is a subset of the MeshCore companion frame protocol (as in `examples/c
 | 56 | GET_STATS | u8 type: 0 core, 1 radio, 2 packets | STATS (24): u8 type, then: core = u16 batt mV, u32 uptime secs, u16 err flags, u8 tx queue len. radio = i16 noise floor dBm, i8 last RSSI, i8 last SNR x4, u32 tx airtime secs, u32 rx airtime secs. packets = u32 recv, u32 sent, u32 sent flood, u32 sent direct, u32 recv flood, u32 recv direct, u32 recv errors. Bad type: ERR code 6. |
 | 31 | GET_CHANNEL | u8 idx | CHANNEL_INFO (18): u8 idx, 32-byte NUL-padded name, 16-byte secret. Only idx 0 exists: name `Public`, secret `8b3387e9c5cdea6ac9e5edbaa115cd72`. Other idx: ERR code 2. |
 | 32 | SET_CHANNEL | any | ERR code 1 (not supported in v1) |
-| 3 | SEND_CHANNEL_TXT_MSG | u8 txt_type (must be 0), u8 channel idx (must be 0), u32 timestamp, text | OK (0). The node transmits `<node name>: <text>` on the channel, cutting the whole string to 160 bytes. ERR code 1 for txt_type != 0, ERR code 2 for a bad idx, ERR code 3 if no packet could be allocated. |
+| 3 | SEND_CHANNEL_TXT_MSG | u8 txt_type (must be 0), u8 channel idx (must be 0), u32 timestamp, text, optional: `00` + sender name (SparkNode1.2, see the amendment below) | OK (0). The node transmits `<sender>: <text>` on the channel, cutting the whole string to 160 bytes; `<sender>` is the sanitized sender name if one was given, otherwise the node name. ERR code 1 for txt_type != 0, ERR code 2 for a bad idx, ERR code 3 if no packet could be allocated. |
 | 2 | SEND_TXT_MSG | u8 txt_type, u8 attempt, u32 timestamp, 6-byte destination pubkey prefix, text | If the prefix equals the node's own pubkey prefix and txt_type is 0: the text (cut to 151 bytes) is stored as a room post authored by the room itself and pushed to room clients; reply SENT (6): u8 0, u32 0, u32 0. This post is NOT echoed back to the host. Any other destination: ERR code 2. Other txt_type: ERR code 1. |
 | 66 | RUN_CLI_COMMAND | command text | CLI_REPLY (29): reply text (may be empty). Runs the room server CLI with remote (non-serial) privileges: serial-only commands are refused, and `set ble.pin` is always refused here. |
 | 10 | SYNC_NEXT_MESSAGE | none | Exactly one of: a room post frame (16), a channel message frame (17), or NO_MORE_MESSAGES (10). Stored room posts newer than the replay cursor come first, oldest first (the cursor advances as each is handed out); then queued channel messages, oldest first. |
@@ -49,7 +49,7 @@ Push `0x89` TRACE_DATA (upstream layout): u8 0, u8 path_len (bytes of hashes), u
 - Channel messages received while no host is active are kept in a RAM ring of 32 (oldest dropped, lost on reboot).
 - Host-originated room posts are not echoed to the host. Host-originated channel messages are not received back from the mesh. The host still keeps a short "recently sent" filter.
 - The node never blocks on the host. With no host, relaying, room login, post storage and post sync to mesh clients continue unchanged.
-- Limits: channel text on air is 160 bytes including the `<node name>: ` prefix; a room post is 151 bytes. The host truncates on a UTF-8 character boundary before sending.
+- Limits: channel text on air is 160 bytes including the `<sender>: ` prefix (node name or host-supplied sender); a room post is 151 bytes. The host truncates on a UTF-8 character boundary before sending.
 
 **Golden vectors** (hex; pubkey of the example node starts `a1b2c3d4e5f6`, timestamp 1700000000)
 - V1 host->node channel send "[robin] radio check": `03000000f153655b726f62696e5d20726164696f20636865636b`
@@ -61,6 +61,7 @@ Push `0x89` TRACE_DATA (upstream layout): u8 0, u8 path_len (bytes of hashes), u
 - V7 battery 4012 mV, storage 0/0: `0cac0f0000000000000000`
 - V8 CLI "get repeat": `4267657420726570656174`, reply "> on": `1d3e206f6e`
 - V9 the V8 command on the serial/TCP wire: `3c0b004267657420726570656174`; its reply on the wire: `3e05001d3e206f6e`
+- V10 host->node channel send "Hallo" as sender "BadPirate" (SparkNode1.2): `03000000f1536548616c6c6f00426164506972617465`; on air: `BadPirate: Hallo`
 
 ## Amendment: host-originated room posts (firmware rule, no frame change)
 
@@ -71,6 +72,28 @@ every SYNC_NEXT_MESSAGE replay, including the replay after APP_START and after a
 reboot. Posts from mesh clients and from the USB or remote `room.post` CLI are delivered as
 before. Limit: the mark is kept for the 32 most recent host posts, which is at least as many
 as the room holds.
+
+## Amendment: sender name for channel sends (SparkNode1.2)
+
+SEND_CHANNEL_TXT_MSG may carry the name to show as the sender on the channel, so a bridge can
+post `BadPirate: Hallo` instead of `<node name>: BadPirate: Hallo`:
+
+```
+03 | u8 txt_type=0 | u8 chan_idx=0 | u32 timestamp | text | [ 00 | sender name ]
+```
+
+- The trailer starts at the first NUL byte in the text field; the sender name runs to the frame
+  end or to a second NUL (anything after that is ignored). Text and name are UTF-8.
+- The node sanitizes the name: `:` is removed, control characters (newline, CR, tab) become
+  spaces, runs of spaces collapse, the ends are trimmed, and it is cut to 31 bytes (MeshCore's
+  32-byte name field) on a UTF-8 boundary. If nothing is left, or the trailer is missing or
+  empty, the node name is used as before.
+- The 160-byte on-air limit now counts `<sender>: `; the host budgets with the sanitized name.
+- Backward compatible both ways: a frame without a NUL is the v1 frame. Firmware before
+  SparkNode1.2 stops the text at the NUL, so it sends `<node name>: <text>` and ignores the
+  name; a host should only send the trailer when DEVICE_INFO reports SparkNode1.2 or later
+  (the bridge falls back to tagging the text itself).
+- Room posts (SEND_TXT_MSG) are unchanged: the room is the author; a host tags the text.
 
 ## CLI commands added by spark-core
 
