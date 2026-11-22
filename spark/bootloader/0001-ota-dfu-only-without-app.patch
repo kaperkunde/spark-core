@@ -1,0 +1,66 @@
+From fbb5067f0e305d5d2edae78b3516a15ce389e14e Mon Sep 17 00:00:00 2001
+From: Spark <spark@invalid>
+Date: Sun, 22 Nov 2026 19:40:18 +0100
+Subject: [PATCH] Spark: DEFAULT_TO_OTA_DFU only for a missing app
+ (OTA_DFU_ONLY_WITHOUT_APP)
+
+---
+ Makefile   |  4 ++++
+ src/main.c | 20 +++++++++++++++++---
+ 2 files changed, 21 insertions(+), 3 deletions(-)
+
+diff --git a/Makefile b/Makefile
+index 5866d15..eae5a36 100644
+--- a/Makefile
++++ b/Makefile
+@@ -376,6 +376,10 @@ ifeq ($(DEFAULT_TO_OTA_DFU), 1)
+ CFLAGS += -DDEFAULT_TO_OTA_DFU
+ endif
+ 
++ifeq ($(OTA_DFU_ONLY_WITHOUT_APP), 1)
++CFLAGS += -DOTA_DFU_ONLY_WITHOUT_APP
++endif
++
+ # Extract semantic version numbers (MAJOR.MINOR.PATCH) from GIT_VERSION.
+ # Supports tags like:
+ #   v1.2.3
+diff --git a/src/main.c b/src/main.c
+index c988ee4..fb17490 100644
+--- a/src/main.c
++++ b/src/main.c
+@@ -253,10 +253,10 @@ static void check_dfu_mode(void) {
+   bool const dfu_skip        = (gpregret == DFU_MAGIC_SKIP);
+ 
+   bool const reason_reset_pin = (NRF_POWER->RESETREAS & POWER_RESETREAS_RESETPIN_Msk) ? true : false;
++  bool const dbl_reset = ((*dbl_reset_mem) == DFU_DBL_RESET_MAGIC) && reason_reset_pin;
+ 
+   // start either serial, uf2 or ble
+-  bool dfu_start = _ota_dfu || serial_only_dfu || uf2_dfu ||
+-                   (((*dbl_reset_mem) == DFU_DBL_RESET_MAGIC) && reason_reset_pin);
++  bool dfu_start = _ota_dfu || serial_only_dfu || uf2_dfu || dbl_reset;
+ 
+   // Clear GPREGRET if it is our values
+   if (dfu_start || dfu_skip) {
+@@ -286,7 +286,21 @@ static void check_dfu_mode(void) {
+     dfu_start = 1;
+   }
+ 
+-#ifdef DEFAULT_TO_OTA_DFU
++#if defined(DEFAULT_TO_OTA_DFU) && defined(OTA_DFU_ONLY_WITHOUT_APP)
++  // Spark variant of DEFAULT_TO_OTA_DFU: only a missing or invalid application (for example
++  // after a BLE transfer that broke off after the old app was erased) selects OTA DFU, so a
++  // node without reachable USB keeps waiting for a BLE retry. Every explicit request for USB
++  // keeps working as in stock builds: double reset, the DFU button, and the application's
++  // UF2 / serial-only DFU requests. Upstream's variant also turns those into OTA DFU, which
++  // leaves no way to reach the UF2 drive at all.
++  if (!valid_app && !dbl_reset && !serial_only_dfu && !uf2_dfu
++#if defined(BUTTON_DFU)
++      && !button_pressed(BUTTON_DFU)
++#endif
++     ) {
++    _ota_dfu = 1;
++  }
++#elif defined(DEFAULT_TO_OTA_DFU)
+   // Default to OTA DFU mode, instead of Serial DFU mode, if there is no app present, 
+   // because otherwise, if there is no application, it will restart in Serial DFU mode,
+   // making it IMPOSSIBLE to recover devices in the field if there are no user 
