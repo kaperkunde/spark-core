@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 #include "helpers/RoutingPolicy.h"
+#include <initializer_list>
 
 using namespace mesh;
 
@@ -107,4 +108,55 @@ TEST(ReplyScope, SendsUnscopedOnlyWhenNoScopeIsAvailableAtAll) {
 int main(int argc, char** argv) {
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();
+}
+
+// ---- loop detection (repeater's loop.detect, also used by the room server's relay) ----
+
+static const uint8_t SELF_KEY[4] = {0xAB, 0xCD, 0xEF, 0x01};
+
+static Packet makePath(uint8_t hash_size, std::initializer_list<uint8_t> path_bytes) {
+    Packet p;
+    p.header = ROUTE_TYPE_TRANSPORT_FLOOD | (PAYLOAD_TYPE_GRP_TXT << PH_TYPE_SHIFT);
+    uint8_t i = 0;
+    for (uint8_t b : path_bytes) p.path[i++] = b;
+    p.setPathHashSizeAndCount(hash_size, i / hash_size);
+    p.payload_len = 1;
+    return p;
+}
+
+TEST(FloodLoop, OffNeverDrops) {
+    auto pkt = makePath(1, {0xAB, 0xAB, 0xAB, 0xAB, 0xAB});
+    EXPECT_FALSE(isFloodLooped(&pkt, SELF_KEY, 0));
+}
+
+TEST(FloodLoop, MinimalAllowsThreeOneByteRepeatsDropsTheFourth) {
+    auto three = makePath(1, {0xAB, 0x11, 0xAB, 0x22, 0xAB});
+    EXPECT_FALSE(isFloodLooped(&three, SELF_KEY, 1));
+    auto four = makePath(1, {0xAB, 0x11, 0xAB, 0x22, 0xAB, 0xAB});
+    EXPECT_TRUE(isFloodLooped(&four, SELF_KEY, 1));
+}
+
+TEST(FloodLoop, NewPacketWithoutOwnHashIsNeverALoop) {
+    // what our own room/HostLink floods look like when a neighbour repeats them back
+    auto fresh = makePath(1, {0x11, 0x22});
+    for (uint8_t mode = 0; mode <= 3; mode++) EXPECT_FALSE(isFloodLooped(&fresh, SELF_KEY, mode)) << (int)mode;
+    auto empty = makePath(2, {});
+    for (uint8_t mode = 0; mode <= 3; mode++) EXPECT_FALSE(isFloodLooped(&empty, SELF_KEY, mode)) << (int)mode;
+}
+
+TEST(FloodLoop, TwoByteHashesUseTheirOwnMaximum) {
+    auto once = makePath(2, {0xAB, 0xCD, 0x11, 0x22});
+    EXPECT_FALSE(isFloodLooped(&once, SELF_KEY, 1));   // minimal: 2 for 2-byte hashes
+    EXPECT_TRUE(isFloodLooped(&once, SELF_KEY, 3));    // strict: 1
+    auto twice = makePath(2, {0xAB, 0xCD, 0x11, 0x22, 0xAB, 0xCD});
+    EXPECT_TRUE(isFloodLooped(&twice, SELF_KEY, 1));
+    auto other = makePath(2, {0xAB, 0x00, 0xAB, 0x01});   // first byte matches, hash does not
+    EXPECT_FALSE(isFloodLooped(&other, SELF_KEY, 3));
+}
+
+TEST(FloodLoop, ModerateOneByte) {
+    auto one = makePath(1, {0xAB});
+    EXPECT_FALSE(isFloodLooped(&one, SELF_KEY, 2));
+    auto two = makePath(1, {0xAB, 0xAB});
+    EXPECT_TRUE(isFloodLooped(&two, SELF_KEY, 2));
 }

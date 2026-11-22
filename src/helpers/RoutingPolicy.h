@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Packet.h>
+#include <string.h>
 
 namespace mesh {
 
@@ -19,6 +20,35 @@ inline bool isFloodHopLimitExceeded(const Packet* packet, uint8_t flood_max,
   if (packet->getRouteType() == ROUTE_TYPE_FLOOD && hops >= flood_max_unscoped) return true;
   if (packet->getPayloadType() == PAYLOAD_TYPE_ADVERT && hops >= flood_max_advert) return true;
   return false;
+}
+
+/**
+ * \brief  Flood loop detection, as the repeater does it: count how often this node's own hash
+ *         already appears in the packet's path, against a maximum per path hash size.
+ * \param  packet        inbound flood packet (caller has already checked isRouteFlood())
+ * \param  self_pub_key  this node's public key (its first bytes are the path hash)
+ * \param  loop_detect   0 off, 1 minimal, 2 moderate, 3 strict (CommonCLI LOOP_DETECT_*)
+ * \returns  true if the packet has looped back here too often, and must not be forwarded
+ */
+inline bool isFloodLooped(const Packet* packet, const uint8_t* self_pub_key, uint8_t loop_detect) {
+  //                                         1-byte  2-byte  3-byte hashes
+  static const uint8_t max_loop_minimal[]  = { 0,  4,      2,      1 };
+  static const uint8_t max_loop_moderate[] = { 0,  2,      1,      1 };
+  static const uint8_t max_loop_strict[]   = { 0,  1,      1,      1 };
+  if (loop_detect == 0) return false;
+  const uint8_t* maximums = loop_detect == 1 ? max_loop_minimal
+                          : loop_detect == 2 ? max_loop_moderate : max_loop_strict;
+  uint8_t hash_size = packet->getPathHashSize();
+  if (hash_size > 3) return false;   // reserved path hash mode
+  uint8_t hash_count = packet->getPathHashCount();
+  uint8_t n = 0;
+  const uint8_t* path = packet->path;
+  while (hash_count > 0) {
+    if (memcmp(path, self_pub_key, hash_size) == 0) n++;
+    hash_count--;
+    path += hash_size;
+  }
+  return n >= maximums[hash_size];
 }
 
 /**

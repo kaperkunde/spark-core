@@ -309,10 +309,22 @@ uint32_t MyMesh::getDirectRetransmitDelay(const mesh::Packet *packet) {
   return getRNG()->nextInt(0, 5*t + 1);
 }
 
+static_assert(LOOP_DETECT_OFF == 0 && LOOP_DETECT_MINIMAL == 1 && LOOP_DETECT_MODERATE == 2 && LOOP_DETECT_STRICT == 3,
+              "mesh::isFloodLooped() takes the loop.detect level as 0..3");
+
 bool MyMesh::allowPacketForward(const mesh::Packet *packet) {
   if (_prefs.disable_fwd) return false;
   if (packet->isRouteFlood()
       && mesh::isFloodHopLimitExceeded(packet, _prefs.flood_max, _prefs.flood_max_unscoped, _prefs.flood_max_advert)) {
+    return false;
+  }
+  // same region and loop checks as simple_repeater (recv_pkt_region is set in onRecvPacket)
+  if (packet->isRouteFlood() && recv_pkt_region == NULL) {
+    MESH_DEBUG_PRINTLN("allowPacketForward: unknown transport code, or wildcard not allowed for FLOOD packet");
+    return false;
+  }
+  if (packet->isRouteFlood() && mesh::isFloodLooped(packet, self_id.pub_key, _prefs.loop_detect)) {
+    MESH_DEBUG_PRINTLN("allowPacketForward: FLOOD packet loop detected!");
     return false;
   }
   return true;
