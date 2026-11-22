@@ -86,6 +86,9 @@ void setup() {
   sensors.begin();
 
   the_mesh.begin(fs);
+#ifdef WITH_HOSTLINK
+  hostlink_setup(the_mesh);
+#endif
 
 #ifdef DISPLAY_CLASS
   ui_task.begin(the_mesh.getNodePrefs(), FIRMWARE_BUILD_DATE, FIRMWARE_VERSION);
@@ -114,6 +117,9 @@ void loop() {
   }
   while (Serial.available() && len < sizeof(command)-1) {
     char c = Serial.read();
+#ifdef WITH_HOSTLINK
+    if (hostlink_usb_byte(c, len == 0)) continue;   // HostLink frame byte: no echo, not CLI text
+#endif
     if (c != '\n') {
       command[len++] = c;
       command[len] = 0;

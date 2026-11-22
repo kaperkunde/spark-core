@@ -1,0 +1,78 @@
+name: Spark
+
+# Spark's existing test suites and its two firmware builds. Upstream MeshCore's own workflows
+# (run-unit-tests.yml, pr-build-check.yml, ...) are unchanged and keep running as before.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  native-spark:
+    name: native_spark unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Clone Repo
+        uses: actions/checkout@v4
+
+      - name: Setup Build Environment
+        uses: ./.github/actions/setup-build-environment
+
+      - name: Run Spark unit tests
+        run: pio test -e native_spark -vv
+
+  bridge:
+    name: Spark Bridge pytest
+    runs-on: ubuntu-latest
+    steps:
+      - name: Clone Repo
+        uses: actions/checkout@v4
+
+      - name: Install Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Install the bridge
+        run: pip install -e 'host[test]'
+
+      - name: Run pytest
+        working-directory: host
+        run: pytest -q
+
+  firmware:
+    name: Build ${{ matrix.environment }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        environment:
+          - SparkNode_P1
+          - SparkKids_TDeckPlus
+    steps:
+      - name: Clone Repo
+        uses: actions/checkout@v4
+
+      - name: Setup Build Environment
+        uses: ./.github/actions/setup-build-environment
+
+      - name: .env from .env.example
+        # .env.example leaves the secrets empty; the build requires them, so CI fills in
+        # placeholders that are only valid for this build.
+        run: |
+          sed -e 's/^SPARK_ADMIN_PASSWORD=$/SPARK_ADMIN_PASSWORD=ci-admin/' \
+              -e 's/^SPARK_ROOM_PASSWORD=$/SPARK_ROOM_PASSWORD=ci-room/' \
+              -e 's/^KIDS_ROOM_KEY=$/KIDS_ROOM_KEY=0000000000000000000000000000000000000000000000000000000000000001/' \
+              -e 's/^KIDS_PARENT_PIN=$/KIDS_PARENT_PIN=0000/' \
+              .env.example > .env
+
+      - name: Build ${{ matrix.environment }}
+        run: pio run -e ${{ matrix.environment }}
+
+      - name: SparkNode DFU package and OTA-safe bootloader
+        if: matrix.environment == 'SparkNode_P1'
+        run: |
+          pio run -e SparkNode_P1 -t dfu_zip
+          spark/bootloader/build.sh

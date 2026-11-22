@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Spark Bridge launchd agent (template). setup.sh fills in @ROOT@, @ENV_FILE@ and @LOG@ and
+     installs it as ~/Library/LaunchAgents/com.kaperkunde.spark-bridge.plist.
+     macOS asks for Bluetooth permission only for a program started from a terminal: run
+     host/.venv/bin/spark-bridge once in Terminal and allow it before relying on this agent. -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.kaperkunde.spark-bridge</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>@ROOT@/host/.venv/bin/spark-bridge</string>
+    <string>--env</string>
+    <string>@ENV_FILE@</string>
+  </array>
+  <key>WorkingDirectory</key><string>@ROOT@</string>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>  <!-- restarts the bridge when it exits (exit 3 after BRIDGE_GIVE_UP_MINUTES without a link) -->
+  <key>ThrottleInterval</key><integer>10</integer>
+  <key>StandardOutPath</key><string>@LOG@</string>
+  <key>StandardErrorPath</key><string>@LOG@</string>
+</dict>
+</plist>

@@ -24,6 +24,15 @@
 #include <helpers/RoutingPolicy.h>
 #include <RTClib.h>
 #include <target.h>
+#ifdef ROOM_PERSIST_POSTS
+  #include <PostPersist.h>
+#endif
+#ifdef WITH_HOSTLINK
+  #include <HostLink.h>
+#endif
+#ifdef ROOM_MEMBER_DIR
+  #include <MemberGlue.h>
+#endif
 
 /* ------------------------------ Config -------------------------------- */
 
@@ -90,6 +99,15 @@ struct PostInfo {
 };
 
 class MyMesh : public mesh::Mesh, public CommonCLICallbacks {
+#ifdef ROOM_PERSIST_POSTS
+  friend class PostPersistAccess;
+#endif
+#ifdef WITH_HOSTLINK
+  friend class HostLink;
+#endif
+#ifdef ROOM_MEMBER_DIR
+  friend class MemberDirAccess;
+#endif
   FILESYSTEM* _fs;
   uint32_t last_millis;
   uint64_t uptime_millis;
@@ -165,6 +183,12 @@ protected:
   void onPeerDataRecv(mesh::Packet* packet, uint8_t type, int sender_idx, const uint8_t* secret, uint8_t* data, size_t len) override;
   bool onPeerPathRecv(mesh::Packet* packet, int sender_idx, const uint8_t* secret, uint8_t* path, uint8_t path_len, uint8_t extra_type, uint8_t* extra, uint8_t extra_len) override;
   void onAckRecv(mesh::Packet* packet, uint32_t ack_crc) override;
+#ifdef WITH_HOSTLINK
+  int searchChannelsByHash(const uint8_t* hash, mesh::GroupChannel channels[], int max_matches) override;
+  void onGroupDataRecv(mesh::Packet* packet, uint8_t type, const mesh::GroupChannel& channel, uint8_t* data, size_t len) override;
+  void onAdvertRecv(mesh::Packet* packet, const mesh::Identity& id, uint32_t timestamp, const uint8_t* app_data, size_t app_data_len) override;
+  void onTraceRecv(mesh::Packet* packet, uint32_t tag, uint32_t auth_code, uint8_t flags, const uint8_t* path_snrs, const uint8_t* path_hashes, uint8_t path_len) override;
+#endif
 
 #if ENV_INCLUDE_GPS == 1
   void applyGpsPrefs() {

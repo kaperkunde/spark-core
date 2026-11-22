@@ -1,3 +1,38 @@
+# Spark: a MeshCore hub for your household and neighbourhood
+
+**This fork adds Spark to [MeshCore](https://github.com/meshcore-dev/MeshCore) v1.18.** Spark turns
+one solar roof node into a hub for your own people and devices, and a relay that helps the local mesh.
+
+- **SparkNode** (SparkNode2): firmware for a [SenseCAP Solar Node P1](https://www.seeedstudio.com/SenseCAP-Solar-Node-P1-for-Meshtastic-LoRa-p-6425.html)
+  on your roof. It is a MeshCore **room** with store-and-forward, so your tribe can talk even when
+  they are not online at the same time, and a **relay** that strengthens the mesh. Other
+  MeshCore-capable boards can work too.
+- **Spark Bridge** (SparkBridge2): a service on a Raspberry Pi or computer near the roof node. It
+  connects the SparkNode room and MeshCore Public with **Discord**, one-way or two-way (more
+  platforms later).
+- **SparkKids** (SparkKids1): firmware for the **LilyGO T-Deck Plus**: a simple touch messenger
+  with location sharing for kids, or anyone in the household who doesn't like fancy tech. A
+  "dumb phone" without a service plan. Talks only to your SparkNode (and, if a parent allows it,
+  to MeshCore Public).
+
+### Get started
+
+You need a SenseCAP Solar Node P1 (or P1-Pro), and for Discord a Raspberry Pi or Mac within
+Bluetooth range of it. Then, on macOS or Raspberry Pi OS:
+
+```sh
+git clone https://github.com/kaperkunde/spark-core.git && cd spark-core
+./setup.sh --dry-run    # see what it will ask and do, changes nothing
+./setup.sh              # choose SparkNode / Spark Bridge / SparkKids, answer, build, flash, install
+```
+
+All settings (radio, names, passwords, PINs, Discord token) live in one gitignored `.env` file;
+[`.env.example`](.env.example) documents every key. Full guide: **[spark/README.md](spark/README.md)**.
+
+*Spark is not part of, or endorsed by, the MeshCore project. The original MeshCore README follows.*
+
+---
+
 ## About MeshCore
 
 MeshCore is a lightweight, portable C++ library that enables multi-hop packet routing for embedded projects using LoRa and other packet radios. It is designed for developers who want to create resilient, decentralized communication networks that work without the internet.
