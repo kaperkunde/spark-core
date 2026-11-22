@@ -1,0 +1,21 @@
+# Spark Bridge systemd unit (template). setup.sh fills in @USER@, @ROOT@ and @ENV_FILE@ and
+# installs it as /etc/systemd/system/spark-bridge.service.
+[Unit]
+Description=Spark Bridge (SparkNode <-> Discord)
+After=bluetooth.target network-online.target
+Wants=bluetooth.target network-online.target
+
+[Service]
+Type=simple
+User=@USER@
+SupplementaryGroups=bluetooth
+WorkingDirectory=@ROOT@
+ExecStart=@ROOT@/host/.venv/bin/spark-bridge --env @ENV_FILE@
+# exits 3 after BRIDGE_GIVE_UP_MINUTES without a link; systemd starts it again
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
