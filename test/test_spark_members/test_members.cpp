@@ -3,6 +3,7 @@
 #include <string>
 // Units under test are included as sources (see test_spark_hostlink for why).
 #include "../../examples/spark_room/MemberDir.cpp"
+#include "../../examples/spark_kids/KidsLogic.cpp"
 
 using namespace spark;
 
@@ -196,6 +197,202 @@ TEST(FormatAge, Units) {
   formatAge(b, sizeof(b), 100000, 100000 - 3 * 3600); EXPECT_STREQ(b, "3h");
   formatAge(b, sizeof(b), 1000000, 1000000 - 5 * 86400); EXPECT_STREQ(b, "5d");
   formatAge(b, sizeof(b), 1000, 2000); EXPECT_STREQ(b, "?");
+}
+
+// ---- kids firmware logic ----
+
+TEST(Kids, FoldUtf8) {
+  char out[64];
+  kids::foldUtf8("Caf\xC3\xA9 \xC3\x9F \xE2\x80\x9Chi\xE2\x80\x9D", out, sizeof(out));
+  EXPECT_STREQ(out, "Cafe ss \"hi\"");
+  kids::foldUtf8("ok \xF0\x9F\x98\x80!", out, sizeof(out));   // emoji
+  EXPECT_STREQ(out, "ok ?!");
+  kids::foldUtf8("a\nb\x01" "c", out, sizeof(out));
+  EXPECT_STREQ(out, "a bc");
+  kids::foldUtf8("\xC3", out, sizeof(out));   // truncated sequence
+  EXPECT_STREQ(out, "?");
+  kids::foldUtf8("abcdef", out, 4);
+  EXPECT_STREQ(out, "abc");
+}
+
+static int fixedW(char, void*) { return 10; }
+struct Lines { std::string l[10]; int n = 0; };
+static void addLine(const char* s, int len, void* ctx) { Lines* L = (Lines*)ctx; L->l[L->n++] = std::string(s, len); }
+
+TEST(Kids, WrapText) {
+  Lines L;
+  int n = kids::wrapText("hello world this is", 60, fixedW, 0, addLine, &L);
+  ASSERT_EQ(n, 4);
+  EXPECT_EQ(L.l[0], "hello");
+  EXPECT_EQ(L.l[1], "world");
+  EXPECT_EQ(L.l[2], "this");
+  EXPECT_EQ(L.l[3], "is");
+  Lines M;
+  n = kids::wrapText("abcdefghij", 40, fixedW, 0, addLine, &M);   // no space: hard break
+  ASSERT_EQ(n, 3);
+  EXPECT_EQ(M.l[0], "abcd");
+  EXPECT_EQ(M.l[2], "ij");
+  EXPECT_EQ(kids::wrapText("", 40, fixedW, 0, addLine, &M), 0);
+}
+
+TEST(Kids, LocationPolicy) {
+  kids::LocState s = {};
+  EXPECT_TRUE(kids::shouldSendLocation(s, 100, 52000000, 4000000));   // first fix
+  s.tried_at = 100;
+  EXPECT_FALSE(kids::shouldSendLocation(s, 130, 52000000, 4000000));  // waiting for reply
+  EXPECT_TRUE(kids::shouldSendLocation(s, 161, 52000000, 4000000));   // retry
+  s = {}; s.sent = true; s.sent_at = 1000; s.lat = 52000000; s.lon = 4000000;
+  EXPECT_FALSE(kids::shouldSendLocation(s, 1000 + 4 * 60, 52010000, 4000000));   // moved, but < 5 min
+  EXPECT_TRUE(kids::shouldSendLocation(s, 1000 + 5 * 60, 52010000, 4000000));    // moved ~1.1 km, 5 min
+  EXPECT_FALSE(kids::shouldSendLocation(s, 1000 + 10 * 60, 52000300, 4000000));  // ~33 m: still
+  EXPECT_TRUE(kids::shouldSendLocation(s, 1000 + 15 * 60, 52000300, 4000000));   // heartbeat
+}
+
+TEST(Kids, Distance) {
+  // Amsterdam Dam -> Centraal is roughly 650 m
+  uint32_t d = kids::distanceMeters(52373100, 4893100, 52378900, 4900400);
+  EXPECT_GT(d, 750u);
+  EXPECT_LT(d, 850u);
+  EXPECT_EQ(kids::distanceMeters(1, 1, 1, 1), 0u);
+}
+
+TEST(Kids, Clock) {
+  EXPECT_EQ(kids::bootClock(1715000000, 1795000000), 1795000000u);
+  EXPECT_EQ(kids::bootClock(1796000000, 1795000000), 1796000000u);
+  EXPECT_TRUE(kids::acceptRoomTime(1000, 2000, false));
+  EXPECT_FALSE(kids::acceptRoomTime(3000, 2000, false));   // never backwards
+  EXPECT_FALSE(kids::acceptRoomTime(1000, 2000, true));    // GPS wins
+}
+
+TEST(Kids, PosixTzCentralEurope) {
+  kids::TzRule r;
+  ASSERT_TRUE(kids::parseTz("CET-1CEST,M3.5.0,M10.5.0/3", r));
+  EXPECT_EQ(kids::tzOffset(r, 1767225600), 3600);   // 2026-01-01
+  EXPECT_EQ(kids::tzOffset(r, 1782864000), 7200);   // 2026-07-01
+  // 2026: CEST from 29 Mar 01:00 UTC (1774746000) to 25 Oct 01:00 UTC (1792890000)
+  EXPECT_EQ(kids::tzOffset(r, 1774746000 - 1), 3600);
+  EXPECT_EQ(kids::tzOffset(r, 1774746000), 7200);
+  EXPECT_EQ(kids::tzOffset(r, 1792890000 - 1), 7200);
+  EXPECT_EQ(kids::tzOffset(r, 1792890000), 3600);
+}
+
+TEST(Kids, PosixTzOthers) {
+  kids::TzRule r;
+  // US Eastern 2026: EDT from 8 Mar 07:00 UTC (1772953200) to 1 Nov 06:00 UTC (1793512800)
+  ASSERT_TRUE(kids::parseTz("EST5EDT,M3.2.0,M11.1.0", r));
+  EXPECT_EQ(kids::tzOffset(r, 1772953200 - 1), -5 * 3600);
+  EXPECT_EQ(kids::tzOffset(r, 1772953200), -4 * 3600);
+  EXPECT_EQ(kids::tzOffset(r, 1793512800 - 1), -4 * 3600);
+  EXPECT_EQ(kids::tzOffset(r, 1793512800), -5 * 3600);
+  // southern hemisphere: Sydney is on daylight time in January, standard time in July
+  ASSERT_TRUE(kids::parseTz("AEST-10AEDT,M10.1.0,M4.1.0/3", r));
+  EXPECT_EQ(kids::tzOffset(r, 1767225600), 11 * 3600);
+  EXPECT_EQ(kids::tzOffset(r, 1782864000), 10 * 3600);
+  // fixed offsets, quoted names, minutes
+  ASSERT_TRUE(kids::parseTz("UTC0", r));
+  EXPECT_EQ(kids::tzOffset(r, 1782864000), 0);
+  ASSERT_TRUE(kids::parseTz("<+0530>-5:30", r));
+  EXPECT_EQ(kids::tzOffset(r, 1782864000), 5 * 3600 + 1800);
+  // invalid strings fall back to UTC
+  EXPECT_FALSE(kids::parseTz("", r));
+  EXPECT_FALSE(kids::parseTz("Europe/Amsterdam", r));
+  EXPECT_FALSE(kids::parseTz("CET-1CEST,M13.5.0,M10.5.0", r));
+  EXPECT_EQ(kids::tzOffset(r, 1782864000), 0);
+}
+
+TEST(Kids, KeyAndMisc) {
+  uint8_t k[32];
+  EXPECT_TRUE(kids::parseKey("0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF", k));
+  EXPECT_EQ(k[0], 0x01);
+  EXPECT_EQ(k[31], 0xEF);
+  EXPECT_FALSE(kids::parseKey("0123", k));
+  EXPECT_FALSE(kids::parseKey("G123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF", k));
+  char h[9];
+  kids::toHex(h, k, 4);
+  EXPECT_STREQ(h, "01234567");
+  EXPECT_EQ(kids::batteryBars(4200), 4);
+  EXPECT_EQ(kids::batteryBars(3600), 1);
+  EXPECT_EQ(kids::batteryBars(3400), 0);
+  int c = kids::authorColor(k, 8);
+  EXPECT_GE(c, 0); EXPECT_LT(c, 8);
+  EXPECT_EQ(c, kids::authorColor(k, 8));
+}
+
+
+TEST(KidsPublic, SettingFollowsBuildDefaultUntilToggled) {
+  using namespace kids;
+  // never touched by a parent: the build default (.env KIDS_PUBLIC_ENABLED) decides
+  EXPECT_FALSE(publicEnabled(PUBLIC_DEFAULT, false));
+  EXPECT_TRUE(publicEnabled(PUBLIC_DEFAULT, true));
+  // a stored choice wins over the build default either way
+  EXPECT_TRUE(publicEnabled(PUBLIC_ON, false));
+  EXPECT_FALSE(publicEnabled(PUBLIC_OFF, true));
+  // unknown stored values (older prefs, rsvd bytes) behave like "default"
+  EXPECT_FALSE(publicEnabled(7, false));
+  EXPECT_TRUE(publicEnabled(7, true));
+}
+
+TEST(KidsPublic, ToggleStoresTheOppositeOfWhatIsShown) {
+  using namespace kids;
+  EXPECT_EQ(publicToggled(PUBLIC_DEFAULT, false), PUBLIC_ON);
+  EXPECT_EQ(publicToggled(PUBLIC_DEFAULT, true), PUBLIC_OFF);
+  EXPECT_EQ(publicToggled(PUBLIC_ON, false), PUBLIC_OFF);
+  EXPECT_EQ(publicToggled(PUBLIC_OFF, true), PUBLIC_ON);
+  // toggling twice returns to the same visible state, and the value persists
+  for (int def = 0; def < 2; def++) {
+    uint8_t m = PUBLIC_DEFAULT;
+    bool before = publicEnabled(m, def);
+    m = publicToggled(m, def);
+    EXPECT_NE(publicEnabled(m, def), before);
+    m = publicToggled(m, def);
+    EXPECT_EQ(publicEnabled(m, def), before);
+    EXPECT_NE(m, PUBLIC_DEFAULT);   // an explicit choice, no longer following the build
+  }
+}
+
+TEST(KidsPublic, RateLimitGapAndHourlyCap) {
+  using namespace kids;
+  PublicRate r;
+  memset(&r, 0, sizeof(r));
+  uint32_t wait = 99;
+  EXPECT_TRUE(publicRateAllow(r, 1000, 3, &wait));
+  EXPECT_EQ(wait, 0u);
+  publicRateRecord(r, 1000);
+  EXPECT_FALSE(publicRateAllow(r, 1010, 3, &wait));   // minimum gap
+  EXPECT_EQ(wait, PUBLIC_MIN_GAP_SECS - 10);
+  EXPECT_TRUE(publicRateAllow(r, 1000 + PUBLIC_MIN_GAP_SECS, 3, &wait));
+  publicRateRecord(r, 1100);
+  publicRateRecord(r, 1200);
+  EXPECT_FALSE(publicRateAllow(r, 1300, 3, &wait));   // 3 in the last hour
+  EXPECT_EQ(wait, 3600u - 300u);                        // until the 1000 post leaves the hour
+  EXPECT_TRUE(publicRateAllow(r, 1000 + 3600, 3, &wait));
+  EXPECT_TRUE(publicRateAllow(r, 1300, 4, nullptr));    // a higher cap allows it
+  // out-of-range caps are clamped, never "unlimited"
+  EXPECT_FALSE(publicRateAllow(r, 1300, 0, nullptr));
+  PublicRate full;
+  memset(&full, 0, sizeof(full));
+  for (int i = 0; i < 40; i++) publicRateRecord(full, 100 + i * 60);
+  EXPECT_FALSE(publicRateAllow(full, 100 + 40 * 60, 1000, nullptr));
+}
+
+TEST(KidsPublic, ChannelTextAndNameTag) {
+  using namespace kids;
+  char name[16];
+  const char* t = splitChannelText("Papa: dinner is ready", name, sizeof(name));
+  EXPECT_STREQ(name, "Papa");
+  EXPECT_STREQ(t, "dinner is ready");
+  t = splitChannelText("no name here", name, sizeof(name));
+  EXPECT_STREQ(name, "");
+  EXPECT_STREQ(t, "no name here");
+  t = splitChannelText("AVeryLongNodeNameIndeed: hi", name, sizeof(name));
+  EXPECT_STREQ(name, "AVeryLongNodeNa");   // cut to the buffer
+  EXPECT_STREQ(t, "hi");
+  t = splitChannelText(": hi", name, sizeof(name));
+  EXPECT_STREQ(name, "");
+  uint8_t a[4], b[4], c[4];
+  nameTag("Papa", a); nameTag("Papa", b); nameTag("Mama", c);
+  EXPECT_EQ(memcmp(a, b, 4), 0);
+  EXPECT_NE(memcmp(a, c, 4), 0);
 }
 
 int main(int argc, char** argv) {
