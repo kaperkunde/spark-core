@@ -668,6 +668,14 @@ bool HostLink::command(uint32_t ts, const char* cmd, char* reply) {
   } else if (strncmp(cmd, "start ota", 9) == 0 && _ble_running) {
     // NRF52Board::startOTAUpdate would initialise Bluefruit a second time
     strcpy(reply, "ERR - BLE is running, use dfu");
+  } else if (strcmp(cmd, "posts reset") == 0) {
+    if (ts != 0) { strcpy(reply, "ERR - USB serial only"); return true; }
+#ifdef ROOM_PERSIST_POSTS
+    _post_cursor = 0;
+    strcpy(reply, PostPersist::reset(*_m) ? "OK - room posts erased" : "ERR - post volume format failed");
+#else
+    strcpy(reply, "ERR - no post store in this build");
+#endif
   } else if (strcmp(cmd, "get build") == 0) {
     sprintf(reply, "> %s", SPARK_BUILD_TAG + 12);   // "<version> <build id>"; keeps the tag in the image
   } else if (strcmp(cmd, "ver") == 0) {

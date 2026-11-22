@@ -19,4 +19,7 @@ public:
   static bool isOn();
   static void usage(uint32_t& used_kb, uint32_t& total_kb);
   static int  count(MyMesh& mesh);   // non-empty entries in the queue
+  // Drop every stored post: empty the queue and erase + format the post volume ("posts reset",
+  // USB only; e.g. after a bootloader update, which uses part of this region as scratch space).
+  static bool reset(MyMesh& mesh);
 };

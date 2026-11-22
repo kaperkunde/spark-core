@@ -72,6 +72,10 @@ public:
   static void raiseClock(MyMesh& m, uint32_t t) {
     if (t > m.getRTCClock()->getCurrentTime()) m.getRTCClock()->setCurrentTime(t);
   }
+  static void clear(MyMesh& m) {
+    for (int i = 0; i < MAX_UNSYNCED_POSTS; i++) m.posts[i].post_timestamp = 0;
+    m.next_post_idx = 0;
+  }
   static void flush(MyMesh& m) {
     store.loop(millis(), count(m), get, &m, m.getRTCClock()->getCurrentTime());
   }
@@ -98,5 +102,15 @@ void PostPersist::loop(MyMesh& mesh) { PostPersistAccess::flush(mesh); }
 bool PostPersist::isOn() { return store.isOn(); }
 void PostPersist::usage(uint32_t& used_kb, uint32_t& total_kb) { store.used(used_kb, total_kb); }
 int PostPersist::count(MyMesh& mesh) { return PostPersistAccess::count(mesh); }
+
+bool PostPersist::reset(MyMesh& mesh) {
+  PostPersistAccess::clear(mesh);
+  if (!ExtraFS.formatRegion() || !ExtraFS.begin()) {
+    store.begin(NULL);   // RAM only until the next boot
+    return false;
+  }
+  store.begin(&ExtraFS);
+  return true;
+}
 
 #endif  // ROOM_PERSIST_POSTS
