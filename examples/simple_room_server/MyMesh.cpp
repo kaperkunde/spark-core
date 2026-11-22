@@ -63,6 +63,12 @@ void MyMesh::storePost(const mesh::Identity &author, const char *postData) {
 
   next_push = futureMillis(PUSH_NOTIFY_DELAY_MILLIS);
   _num_posted++; // stats
+#ifdef ROOM_PERSIST_POSTS
+  PostPersist::changed();
+#endif
+#ifdef WITH_HOSTLINK
+  hostlink_post_stored();
+#endif
   MESH_DEBUG_PRINTLN("room.post: next_post_idx=%d num_posted=%d push scheduled", next_post_idx, _num_posted);
 }
 
@@ -213,6 +219,12 @@ int MyMesh::handleRequest(ClientInfo *sender, uint32_t sender_timestamp, uint8_t
       return ofs;
     }
   }
+#ifdef ROOM_MEMBER_DIR
+  {
+    int n = member_dir_request(*this, sender, payload, payload_len, &reply_data[4], sizeof(reply_data) - 4);
+    if (n > 0) return 4 + n;
+  }
+#endif
   return 0; // unknown command
 }
 
@@ -374,6 +386,9 @@ void MyMesh::onAnonDataRecv(mesh::Packet *packet, const uint8_t *secret, const m
 
       dirty_contacts_expiry = futureMillis(LAZY_CONTACTS_WRITE_DELAY);
     }
+#ifdef ROOM_MEMBER_DIR
+    member_dir_login(*this, client);
+#endif
 
     if (packet->isRouteFlood()) {
       client->out_path_len = OUT_PATH_UNKNOWN;  // need to rediscover out_path
@@ -668,6 +683,9 @@ MyMesh::MyMesh(mesh::MainBoard &board, mesh::Radio &radio, mesh::MillisecondCloc
 #ifdef ROOM_PASSWORD
   StrHelper::strncpy(_prefs.guest_password, ROOM_PASSWORD, sizeof(_prefs.guest_password));
 #endif
+#ifdef SPARK_PATH_HASH_MODE
+  _prefs.path_hash_mode = SPARK_PATH_HASH_MODE;   // new installs only: bytes per hop - 1
+#endif
 
   // GPS defaults
   _prefs.gps_enabled = 0;
@@ -701,6 +719,12 @@ void MyMesh::begin(FILESYSTEM *fs) {
 
   acl.load(_fs, self_id);
   region_map.load(_fs);
+#ifdef ROOM_PERSIST_POSTS
+  PostPersist::restore(*this);   // refill posts[], floor the clock above persisted posts
+#endif
+#ifdef ROOM_MEMBER_DIR
+  member_dir_begin(*this);
+#endif
 
   // establish default-scope
   {
@@ -940,6 +964,13 @@ void MyMesh::handleCommand(uint32_t sender_timestamp, char *command, char *reply
     command += 3;
   }
 
+#ifdef WITH_HOSTLINK
+  if (hostlink_command(sender_timestamp, command, reply)) return;   // ble.* / get spark
+#endif
+#ifdef ROOM_MEMBER_DIR
+  if (member_dir_command(*this, command, reply)) return;   // members / member / where
+#endif
+
   // handle ACL related commands
   if (memcmp(command, "setperm ", 8) == 0) {   // format:  setperm {pubkey-hex} {permissions-int8}
     char* hex = &command[8];
@@ -983,8 +1014,10 @@ void MyMesh::handleCommand(uint32_t sender_timestamp, char *command, char *reply
       addSystemPost(msg);
       snprintf(reply, MAX_POST_TEXT_LEN, "OK");
     }
+#ifndef ROOM_ALLOW_REPEAT_TOGGLE
   } else if (memcmp(command, "set repeat on", 13) == 0) {
     strcpy(reply, "ERR - repeat now deprecated");
+#endif
   } else{
     _cli.handleCommand(sender_timestamp, command, reply);  // common CLI commands
   }
@@ -1073,6 +1106,16 @@ void MyMesh::loop() {
   }
 
   // TODO: periodically check for OLD/inactive entries in known_clients[], and evict
+
+#ifdef ROOM_PERSIST_POSTS
+  PostPersist::loop(*this);
+#endif
+#ifdef ROOM_MEMBER_DIR
+  member_dir_loop(*this);
+#endif
+#ifdef WITH_HOSTLINK
+  hostlink_loop();
+#endif
 
   // update uptime
   uint32_t now = millis();
