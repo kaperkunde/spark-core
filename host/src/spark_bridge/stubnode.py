@@ -1,6 +1,7 @@
 """Contract-faithful fake HostLink node (TCP, serial-style framing).
 
-Implements HOSTLINK CONTRACT v1: the frame subset, the room-post replay cursor, the
+Implements HOSTLINK CONTRACT v1 (plus the SparkNode1.2 sender name on channel sends, when the
+stub's version is SparkNode1.2 or later): the frame subset, the room-post replay cursor, the
 32-entry channel ring, "no echo of host posts" and the golden vectors. Used by the tests
 and runnable by hand:
 
@@ -19,6 +20,8 @@ import sys
 import time
 from collections import deque
 from dataclasses import dataclass
+
+from .textlimits import sanitize_sender
 
 OWN_PUBKEY = bytes.fromhex("a1b2c3d4e5f6") + bytes(range(26))
 PUBLIC_SECRET = bytes.fromhex("8b3387e9c5cdea6ac9e5edbaa115cd72")
@@ -82,7 +85,10 @@ def build_self_info(name: str = "SparkNode") -> bytes:
             + le32(869525) + le32(250000) + bytes([11, 5]) + name.encode())
 
 
-def build_device_info(version: str = "v1.18.0-SparkNode1", repeat: bool = True) -> bytes:
+STUB_VERSION = "v1.18.0-SparkNode1.2"
+
+
+def build_device_info(version: str = STUB_VERSION, repeat: bool = True) -> bytes:
     return (bytes([DEVICE_INFO, 14, 0, 1]) + le32(0) + pad("20 Nov 2026", 12) + pad("SparkNode stub", 40)
             + pad(version, 20) + bytes([int(repeat), 0]))
 
@@ -99,7 +105,7 @@ class Post:
 
 
 class StubNode:
-    def __init__(self, name: str = "SparkNode", version: str = "v1.18.0-SparkNode1", clock=time.time):
+    def __init__(self, name: str = "SparkNode", version: str = STUB_VERSION, clock=time.time):
         self.name = name
         self.version = version
         self.clock = clock
@@ -143,6 +149,12 @@ class StubNode:
             w.close()
         self._writers.clear()
         await asyncio.sleep(0)
+
+    @property
+    def supports_sender(self) -> bool:
+        from .nodelink import SENDER_NAME_VERSION, spark_node_version
+        v = spark_node_version(self.version)
+        return v is not None and v >= SENDER_NAME_VERSION
 
     @property
     def connected(self) -> bool:
@@ -267,8 +279,12 @@ class StubNode:
                 return [err(1)]
             if p[2] != 0:
                 return [err(2)]
-            text = p[7:].decode(errors="ignore")
-            self.transmitted.append(cut_utf8(f"{self.name}: {text}", 160))
+            raw, _, trailer = p[7:].partition(b"\0")
+            text = raw.decode(errors="ignore")
+            sender = ""
+            if trailer and self.supports_sender:
+                sender = sanitize_sender(trailer.partition(b"\0")[0].decode(errors="ignore"))
+            self.transmitted.append(cut_utf8(f"{sender or self.name}: {text}", 160))
             return [bytes([OK])]
         if c == 2:
             if len(p) < 13:

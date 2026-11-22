@@ -3,6 +3,7 @@
 Per Discord channel (stored in SQLite, see store.ChannelConfig):
   admin    on/off      allows `/spark cli` and `/spark health` here
   send     none|public|room|both      Discord -> mesh; prefix on/off; rate limit
+                                      (public/both needs an explicit confirmation)
   receive  none|public|room|both      mesh -> Discord
   report   on/off      daily health line and link up/down notices here
 """
@@ -19,8 +20,8 @@ from typing import Any, Callable, Protocol
 from .config import Config
 from .nodelink import ChannelMsg, LinkError, RoomPost
 from .store import RATE_MODES, RECEIVE_SOURCES, SEND_TARGETS, ChannelConfig, Store
-from .textlimits import (ROOM_POST_MAX, clean, public_budget, split_author, tag, text_hash,
-                         truncate_utf8)
+from .textlimits import (ROOM_POST_MAX, clean, public_budget, sanitize_sender, split_author, tag,
+                         text_hash, truncate_utf8)
 
 log = logging.getLogger("spark_bridge.bridge")
 
@@ -109,6 +110,18 @@ def format_where(fixes: list[WhereFix]) -> str:
 NOTICE_PAIR_SECONDS = 600
 META_DOWN_PENDING = "down_notice_pending"
 META_LAST_PAIR = "last_notice_pair"
+AUDIT_PUBLIC_ON = "send public on"
+AUDIT_PUBLIC_OFF = "send public off"
+DEFAULT_SENDER = "Discord"   # when a display name has nothing usable left after sanitizing
+
+PUBLIC_SEND_WARNING = (
+    "**Warning: Discord to MeshCore Public**\n"
+    "- Sending to Public from Discord is designed for single-user convenience, "
+    "not for mass sending or bots.\n"
+    "- Anyone who can write in this Discord channel will be able to send to Public "
+    "using your station's credentials and identity.\n"
+    "- Don't enable it on public or shared Discord channels.\n"
+    "The rate limits stay in force. Who enabled it, and when, is logged.")
 DANGEROUS_CLI = ("password", "set password", "set guest.password", "set prv.key", "get prv.key",
                  "erase", "start ota", "set ble.pin", "dfu")
 
@@ -137,7 +150,7 @@ class NodePort(Protocol):
 
     @property
     def own_author(self) -> str: ...
-    async def send_public(self, text: str) -> None: ...
+    async def send_public(self, text: str, sender: str | None = None) -> None: ...
     async def post_room(self, text: str) -> None: ...
     async def cli(self, command: str) -> str: ...
     async def drain(self) -> int: ...
@@ -188,6 +201,15 @@ class TokenBucket:
 
 class BridgeError(Exception):
     """A user-facing configuration error."""
+
+
+class NeedsConfirmation(BridgeError):
+    """Enabling Discord -> Public send needs an explicit confirmation (the warning is the text)."""
+
+    def __init__(self, target: str):
+        super().__init__(f"{PUBLIC_SEND_WARNING}\n\nTo enable `send {target}`, press **Confirm** or run "
+                         f"`/spark send target:{target} confirm:True`.")
+        self.target = target
 
 
 class ChannelGone(Exception):
@@ -355,15 +377,24 @@ class Bridge:
 
         sent_to: list[str] = []
         truncated = failed = False
-        full = tag(m.author, body, ch.prefix)
+        name = self.sender_name(m.user_id, m.author)
+        full = tag(name, body, ch.prefix)
         if ch.sends_to("public"):
-            budget = public_budget(self.node.node_name)
-            text, cut = truncate_utf8(full, budget)
+            # With prefix on, a SparkNode1.2+ node sends "<alias>: <text>" itself (sender name in
+            # the frame), so there is no "<node>: [alias] text" double name. Older nodes: tag.
+            use_sender = ch.prefix and getattr(self.node, "supports_sender", False)
+            if use_sender:
+                text, cut = truncate_utf8(body, public_budget(name))
+            else:
+                text, cut = truncate_utf8(full, public_budget(self.node.node_name))
             truncated |= cut
             try:
                 self._remember(text)
                 self._public_bucket.take()
-                await self.node.send_public(text)
+                if use_sender:
+                    await self.node.send_public(text, sender=name)
+                else:
+                    await self.node.send_public(text)
                 sent_to.append("public")
             except LinkError as exc:
                 log.warning("public send failed: %s", exc)
@@ -391,8 +422,10 @@ class Bridge:
             await self._fan_out(target, m.author, body, skip_channel=m.channel_id)
 
     # ------------------------------------------------------------------ commands
-    def configure(self, channel_id: int, guild_id: int, user_id: int | None = None, **changes) -> ChannelConfig:
-        """Validate and persist changes to a channel's behaviour."""
+    def configure(self, channel_id: int, guild_id: int, user_id: int | None = None, *,
+                  confirm: bool = False, **changes) -> ChannelConfig:
+        """Validate and persist changes to a channel's behaviour. Setting send to public or both
+        raises NeedsConfirmation unless `confirm` is true (or the channel already has that target)."""
         if "send_target" in changes and changes["send_target"] not in SEND_TARGETS:
             raise BridgeError(f"send must be one of {', '.join(SEND_TARGETS)}")
         if "receive_source" in changes and changes["receive_source"] not in RECEIVE_SOURCES:
@@ -405,10 +438,24 @@ class Bridge:
         if changes.get("rate_mode") in ("channel", "user") and n is None:
             changes.pop("rate_per_minute", None)  # keep the stored value
         cur = self.store.get_channel(channel_id)
+        old_target = cur.send_target if cur else "none"
+        new_target = changes.get("send_target", old_target)
+        public_before = old_target in ("public", "both")
+        public_after = new_target in ("public", "both")
+        if public_after and new_target != old_target and not confirm:
+            raise NeedsConfirmation(new_target)
         if changes.get("admin") and not (cur and cur.admin) and "report" not in changes:
             changes["report"] = True  # new admin channels get the daily line and link notices
-        return self.store.update_channel(channel_id, guild_id, self.cfg.limits.default_per_minute,
-                                         user_id, **changes)
+        new = self.store.update_channel(channel_id, guild_id, self.cfg.limits.default_per_minute,
+                                        user_id, **changes)
+        if public_after and new_target != old_target:
+            self.store.add_audit(channel_id, user_id, AUDIT_PUBLIC_ON, self.clock())
+            log.warning("Discord -> Public send enabled (send %s) in channel %s (guild %s) by user %s",
+                        new_target, channel_id, guild_id, user_id)
+        elif public_before and not public_after:
+            self.store.add_audit(channel_id, user_id, AUDIT_PUBLIC_OFF, self.clock())
+            log.info("Discord -> Public send disabled in channel %s by user %s", channel_id, user_id)
+        return new
 
     def describe(self, ch: ChannelConfig | None, channel_id: int) -> str:
         ch = ch or ChannelConfig(channel_id=channel_id, rate_per_minute=self.cfg.limits.default_per_minute)
@@ -419,6 +466,12 @@ class Bridge:
             rate = ("no limit" if ch.rate_mode == "none"
                     else f"{ch.rate_per_minute}/min per {ch.rate_mode}")
             send = f"{ch.send_target}, prefix {onoff(ch.prefix)}, rate limit {rate}"
+            if ch.sends_to("public"):
+                who = self.store.last_audit(ch.channel_id, AUDIT_PUBLIC_ON)
+                if who:
+                    when = time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime(who[0]))
+                    by = f"<@{who[1]}>" if who[1] else "unknown"
+                    send += f" (Public enabled by {by}, {when})"
         link = (f"up ({self.node.node_name} {self.node.version})" if self.node.connected else "down")
         return (f"**Channel behaviour**\n"
                 f"- admin: {onoff(ch.admin)}\n"
@@ -429,6 +482,38 @@ class Bridge:
 
     def status(self, channel_id: int) -> str:
         return self.describe(self.store.get_channel(channel_id), channel_id)
+
+    # ------------------------------------------------------------------ aliases
+    def sender_name(self, user_id: int, display_name: str) -> str:
+        """The name a Discord user has on the mesh: the alias, else the sanitized display name."""
+        alias = self.store.get_alias(user_id)
+        if alias:
+            return alias
+        return sanitize_sender(display_name) or DEFAULT_SENDER
+
+    def alias_set(self, user_id: int, name: str, by: int | None = None) -> str:
+        clean_name = sanitize_sender(name)
+        if not clean_name:
+            raise BridgeError("That alias is empty after removing ':' and control characters.")
+        owner = self.store.alias_owner(clean_name)
+        if owner is not None and owner != user_id:
+            raise BridgeError(f"`{clean_name}` is already the alias of <@{owner}>.")
+        self.store.set_alias(user_id, clean_name, by)
+        log.info("alias for user %s set to %r by %s", user_id, clean_name, by)
+        note = "" if clean_name == name.strip() else " (cleaned up: no ':' or line breaks, at most 31 bytes)"
+        return f"<@{user_id}> now posts to the mesh as **{clean_name}**{note}."
+
+    def alias_del(self, user_id: int, by: int | None = None) -> str:
+        if not self.store.delete_alias(user_id):
+            raise BridgeError(f"<@{user_id}> has no alias.")
+        log.info("alias for user %s removed by %s", user_id, by)
+        return f"Alias of <@{user_id}> removed: their Discord display name is used again."
+
+    def alias_list(self) -> str:
+        rows = self.store.all_aliases()
+        if not rows:
+            return "No aliases set. Without one, a user posts to the mesh under their Discord display name."
+        return "**Mesh aliases**\n" + "\n".join(f"- <@{uid}>: {name}" for uid, name in rows)
 
     def cli_allowed(self, command: str) -> bool:
         norm = " ".join(command.lower().split())

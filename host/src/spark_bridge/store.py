@@ -1,4 +1,4 @@
-"""SQLite state: per-channel behaviour, dedup, names, battery samples, link events."""
+"""SQLite state: per-channel behaviour, dedup, names, aliases, audit, battery samples, link events."""
 
 from __future__ import annotations
 
@@ -36,6 +36,10 @@ CREATE TABLE IF NOT EXISTS names(prefix TEXT PRIMARY KEY, name TEXT NOT NULL, up
 CREATE TABLE IF NOT EXISTS battery(ts INTEGER PRIMARY KEY, mv INTEGER NOT NULL, uptime INTEGER, noise INTEGER);
 CREATE TABLE IF NOT EXISTS link_events(ts INTEGER NOT NULL, up INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS aliases(user_id INTEGER PRIMARY KEY, name TEXT NOT NULL, set_by INTEGER,
+  updated INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS audit(ts INTEGER NOT NULL, channel_id INTEGER NOT NULL, user_id INTEGER,
+  action TEXT NOT NULL);
 """
 
 SEEN_KEEP = 500
@@ -172,6 +176,43 @@ class Store:
     def get_name(self, prefix: str) -> str | None:
         r = self.db.execute("SELECT name FROM names WHERE prefix=?", (prefix.lower(),)).fetchone()
         return r["name"] if r else None
+
+    # --- aliases (Discord user -> mesh sender name) ------------------------
+    def set_alias(self, user_id: int, name: str, set_by: int | None = None) -> None:
+        self.db.execute(
+            "INSERT INTO aliases VALUES(?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET name=excluded.name, "
+            "set_by=excluded.set_by, updated=excluded.updated", (user_id, name, set_by, int(time.time())))
+        self.db.commit()
+
+    def get_alias(self, user_id: int) -> str | None:
+        r = self.db.execute("SELECT name FROM aliases WHERE user_id=?", (user_id,)).fetchone()
+        return r["name"] if r else None
+
+    def alias_owner(self, name: str) -> int | None:
+        """The user that has this alias (case-insensitive), if any."""
+        r = self.db.execute("SELECT user_id FROM aliases WHERE lower(name)=lower(?)", (name,)).fetchone()
+        return r["user_id"] if r else None
+
+    def delete_alias(self, user_id: int) -> bool:
+        cur = self.db.execute("DELETE FROM aliases WHERE user_id=?", (user_id,))
+        self.db.commit()
+        return cur.rowcount > 0
+
+    def all_aliases(self) -> list[tuple[int, str]]:
+        return [(r["user_id"], r["name"]) for r in self.db.execute(
+            "SELECT user_id, name FROM aliases ORDER BY lower(name)")]
+
+    # --- audit ----------------------------------------------------------
+    def add_audit(self, channel_id: int, user_id: int | None, action: str, ts: float | None = None) -> None:
+        self.db.execute("INSERT INTO audit VALUES(?,?,?,?)",
+                        (int(ts if ts is not None else time.time()), channel_id, user_id, action))
+        self.db.commit()
+
+    def last_audit(self, channel_id: int, action: str) -> tuple[int, int | None] | None:
+        """(ts, user_id) of the latest audit row for this channel and action."""
+        r = self.db.execute("SELECT ts, user_id FROM audit WHERE channel_id=? AND action=? "
+                            "ORDER BY ts DESC, rowid DESC LIMIT 1", (channel_id, action)).fetchone()
+        return (r["ts"], r["user_id"]) if r else None
 
     # --- battery / link -------------------------------------------------
     def add_battery(self, ts: int, mv: int, uptime: int | None = None, noise: int | None = None) -> None:

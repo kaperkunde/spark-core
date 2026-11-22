@@ -25,9 +25,9 @@ class FakeNode:
         self.backlog: list = []
         self.handlers = None
 
-    async def send_public(self, t):
+    async def send_public(self, t, sender=None):
         if self.fail: raise LinkError("boom")
-        self.public.append(t)
+        self.public.append(t if sender is None else f"{sender}: {t}")
 
     async def post_room(self, t):
         if self.fail: raise LinkError("boom")
@@ -70,8 +70,8 @@ def env():
     return b, node, chat, clock
 
 
-def cfg(b, ch, **kw):
-    return b.configure(ch, GUILD, 1, **kw)
+def cfg(b, ch, confirm=True, **kw):
+    return b.configure(ch, GUILD, 1, confirm=confirm, **kw)
 
 
 def msg(ch, text, user=7, name="robin", mid=1):
@@ -492,3 +492,118 @@ async def test_deleted_channel_rows_are_removed_once(env, caplog):
     removed = [r for r in caplog.records if "removed from the bridge" in r.getMessage()]
     assert len(removed) == 2
     assert b.forget_channel(1111111111111111111) is False   # already gone: no second log line
+
+
+# ---- sender names and aliases (SparkBridge1.2) ------------------------------------------------
+async def test_sender_name_replaces_text_prefix_on_new_firmware(env):
+    b, node, chat, _ = env
+    node.supports_sender = True
+    cfg(b, CHAT, send_target="both", rate_mode="none")
+    await b.on_discord_message(msg(CHAT, "Hallo", name="BadPirate"))
+    assert node.public == ["BadPirate: Hallo"]          # no "SparkNode: [BadPirate] Hallo"
+    assert node.room == ["[BadPirate] Hallo"]           # the room is the author: text tag stays
+    b.alias_set(7, "Kevin")
+    await b.on_discord_message(msg(CHAT, "again", name="BadPirate", mid=2))
+    assert node.public[-1] == "Kevin: again" and node.room[-1] == "[Kevin] again"
+
+
+async def test_prefix_off_sends_as_the_node(env):
+    b, node, chat, _ = env
+    node.supports_sender = True
+    cfg(b, CHAT, send_target="public", prefix=False)
+    await b.on_discord_message(msg(CHAT, "plain"))
+    assert node.public == ["plain"]
+
+
+async def test_old_firmware_keeps_the_text_tag_with_the_alias(env):
+    b, node, chat, _ = env   # FakeNode has no supports_sender: SparkNode1.1 behaviour
+    cfg(b, CHAT, send_target="public")
+    b.alias_set(7, "Kevin")
+    await b.on_discord_message(msg(CHAT, "hi"))
+    assert node.public == ["[Kevin] hi"]
+
+
+async def test_default_sender_is_the_sanitized_display_name(env):
+    b, node, chat, _ = env
+    node.supports_sender = True
+    cfg(b, CHAT, send_target="public", rate_mode="none")
+    await b.on_discord_message(msg(CHAT, "x", name="Dr: Who\n2", mid=1))
+    await b.on_discord_message(msg(CHAT, "y", name=":::", user=8, mid=2))
+    await b.on_discord_message(msg(CHAT, "z", name="N" * 50, user=9, mid=3))
+    assert node.public == ["Dr Who 2: x", "Discord: y", "N" * 31 + ": z"]
+
+
+async def test_sender_budget_uses_the_sender_name(env):
+    b, node, chat, _ = env
+    node.supports_sender = True
+    cfg(b, CHAT, send_target="public", rate_mode="none")
+    await b.on_discord_message(msg(CHAT, "a" * 300, name="Bo", mid=4))
+    assert len(node.public[0].encode()) == 160 and node.public[0].startswith("Bo: aaa")
+    assert (CHAT, 4, REACT_TRUNCATED) in chat.reacts
+
+
+def test_alias_commands(env):
+    b, *_ = env
+    assert "No aliases" in b.alias_list()
+    assert "**Kevin**" in b.alias_set(7, "  Kevin ")
+    assert "cleaned up" in b.alias_set(8, "Ro:bin\nX")
+    assert b.store.get_alias(8) == "Robin X"
+    with pytest.raises(BridgeError, match="already the alias"):
+        b.alias_set(9, "kevin")          # case-insensitive, one user per alias
+    b.alias_set(7, "KEVIN")              # renaming yourself is fine
+    with pytest.raises(BridgeError, match="empty"):
+        b.alias_set(9, ": \n")
+    assert b.alias_list() == "**Mesh aliases**\n- <@7>: KEVIN\n- <@8>: Robin X"
+    assert b.sender_name(7, "whatever") == "KEVIN" and b.sender_name(9, "Zed") == "Zed"
+    assert "removed" in b.alias_del(7)
+    with pytest.raises(BridgeError):
+        b.alias_del(7)
+    assert b.sender_name(7, "whatever") == "whatever"
+
+
+def test_aliases_persist(tmp_path):
+    from spark_bridge.config import Config
+    path = tmp_path / "s.db"
+    b = Bridge(Store(path), FakeNode(), FakeChat(), Config())
+    b.alias_set(7, "Kevin", by=1)
+    b.store.close()
+    assert Store(path).get_alias(7) == "Kevin"
+
+
+# ---- enabling Discord -> Public needs a confirmation -------------------------------------------
+@pytest.mark.parametrize("target", ["public", "both"])
+def test_public_send_needs_confirmation(env, target):
+    from spark_bridge.bridge import NeedsConfirmation
+    b, *_ = env
+    with pytest.raises(NeedsConfirmation) as exc:
+        cfg(b, CHAT, confirm=False, send_target=target)
+    text = str(exc.value)
+    assert "single-user convenience, not for mass sending or bots" in text
+    assert "your station's credentials and identity" in text
+    assert "Don't enable it on public or shared Discord channels" in text
+    assert f"confirm:True" in text and exc.value.target == target
+    assert b.store.get_channel(CHAT) is None          # nothing changed
+    assert b.store.last_audit(CHAT, "send public on") is None
+
+
+def test_room_send_and_unchanged_target_need_no_confirmation(env):
+    b, *_ = env
+    cfg(b, CHAT, confirm=False, send_target="room")
+    cfg(b, CHAT, send_target="public")
+    cfg(b, CHAT, confirm=False, send_target="public")   # already public: no new decision
+    cfg(b, CHAT, confirm=False, prefix=False)           # other settings: no confirmation
+    from spark_bridge.bridge import NeedsConfirmation
+    with pytest.raises(NeedsConfirmation):
+        cfg(b, CHAT, confirm=False, send_target="both")  # a different public target asks again
+    cfg(b, CHAT, confirm=False, send_target="none")      # turning it off never asks
+
+
+def test_public_enable_is_logged_with_who_and_when(env, caplog):
+    b, node, chat, clock = env
+    with caplog.at_level("WARNING", logger="spark_bridge"):
+        b.configure(CHAT, GUILD, 4242, confirm=True, send_target="public")
+    assert any("Public send enabled" in r.getMessage() and "4242" in r.getMessage() for r in caplog.records)
+    assert b.store.last_audit(CHAT, "send public on") == (int(clock.t), 4242)
+    assert "Public enabled by <@4242>, 2023-11-14 22:13 UTC" in b.status(CHAT)
+    b.configure(CHAT, GUILD, 99, send_target="none")
+    assert b.store.last_audit(CHAT, "send public off") == (int(clock.t), 99)

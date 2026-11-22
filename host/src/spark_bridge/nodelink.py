@@ -7,7 +7,8 @@ Lib calls used per contract command (meshcore 2.3.19), no raw frames were needed
   SET_DEVICE_TIME      commands.set_time(epoch)
   GET_BATT_AND_STORAGE commands.get_bat()
   GET_STATS 0/1        commands.get_stats_core() / get_stats_radio()
-  SEND_CHANNEL_TXT_MSG commands.send_chan_msg(0, text, timestamp)
+  SEND_CHANNEL_TXT_MSG commands.send_chan_msg(0, text, timestamp); SparkNode1.2 sender name:
+                       text + "\0" + sender (the lib encodes the str as is)
   SEND_TXT_MSG (room)  commands.send_msg(<own 6-byte prefix>, text, timestamp)
   RUN_CLI_COMMAND      commands.run_cli_command(cmd)
   SYNC_NEXT_MESSAGE    commands.get_msg()   (reply events used directly, no subscriptions)
@@ -24,6 +25,7 @@ import asyncio
 import gc
 import logging
 import random
+import re
 import time
 from dataclasses import dataclass
 from typing import Any, Protocol
@@ -44,6 +46,14 @@ class LinkGaveUp(Exception):
 
 
 NUS_SERVICE_UUID = "6E400001-B5A3-F393-E0A9-E50E24DCCA9E"  # MeshCore BLE UART service
+SENDER_NAME_VERSION = (1, 2)  # SparkNode1.2: SEND_CHANNEL_TXT_MSG takes a sender name
+_SPARK_VER = re.compile(r"SparkNode(\d+)(?:\.(\d+))?")
+
+
+def spark_node_version(version: str) -> tuple[int, int] | None:
+    """(major, minor) from a DEVICE_INFO version like "v1.18.0-SparkNode1.2"; None if not a SparkNode."""
+    m = _SPARK_VER.search(version or "")
+    return (int(m[1]), int(m[2] or 0)) if m else None
 
 
 @dataclass
@@ -104,6 +114,12 @@ class NodeLink:
     @property
     def own_prefix(self) -> bytes:
         return bytes.fromhex(self.pubkey)[:6]
+
+    @property
+    def supports_sender(self) -> bool:
+        """The node puts a host-supplied sender name on Public (SparkNode1.2 or later)."""
+        v = spark_node_version(self.version)
+        return v is not None and v >= SENDER_NAME_VERSION
 
     @property
     def own_author(self) -> str:
@@ -278,7 +294,11 @@ class NodeLink:
     async def packet_stats(self) -> dict[str, Any]:
         return dict((await self._cmd(self._require().commands.get_stats_packets())).payload)
 
-    async def send_public(self, text: str) -> None:
+    async def send_public(self, text: str, sender: str | None = None) -> None:
+        """Send on Public. With `sender` (already sanitized, SparkNode1.2+) the node sends
+        "<sender>: <text>" instead of "<node name>: <text>"."""
+        if sender:
+            text = f"{text}\0{sender}"
         await self._cmd(self._require().commands.send_chan_msg(0, text, int(self._clock())))
 
     async def post_room(self, text: str) -> None:

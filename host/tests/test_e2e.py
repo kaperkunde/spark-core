@@ -20,7 +20,7 @@ async def test_end_to_end(stub):
     node = NodeLink(cfg.node, clock=lambda: T0)
     bridge = Bridge(Store(), node, chat, cfg)
     node.handlers = bridge
-    bridge.configure(1, 1, receive_source="both", send_target="both", prefix=True)
+    bridge.configure(1, 1, confirm=True, receive_source="both", send_target="both", prefix=True)
     stub.inject_room_post("deadbeef", "backlog post", ts=T0 - 10)  # first run: not forwarded
     task = asyncio.create_task(node.run())
     try:
@@ -30,7 +30,11 @@ async def test_end_to_end(stub):
         await wait_for(lambda: chat.sent)
         assert chat.sent[0] == (1, "Bob", "hello")
         await bridge.on_discord_message(Inbound(1, 1, 7, 3, "robin", "from discord"))
-        assert stub.transmitted == ["SparkNode: [robin] from discord"] and stub.room_pushed == ["[robin] from discord"]
+        # SparkNode1.2: the sender name goes in the frame, the room post keeps the [name] tag
+        assert stub.transmitted == ["robin: from discord"] and stub.room_pushed == ["[robin] from discord"]
+        bridge.alias_set(3, "Robin Roof")
+        await bridge.on_discord_message(Inbound(1, 1, 8, 3, "robin", "again"))
+        assert stub.transmitted[-1] == "Robin Roof: again" and stub.room_pushed[-1] == "[Robin Roof] again"
         chat.sent.clear()
         # node drops: bridge reconnects, the replay includes our own post and the backlog; nothing is forwarded
         await stub.drop_connections()

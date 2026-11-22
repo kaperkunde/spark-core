@@ -46,7 +46,8 @@ async def test_handshake(stub):
     link = mklink(stub, rec)
     await link.connect()
     try:
-        assert link.node_name == "SparkNode" and link.version == "v1.18.0-SparkNode1"
+        assert link.node_name == "SparkNode" and link.version == "v1.18.0-SparkNode1.2"
+        assert link.supports_sender
         assert link.own_prefix == H("a1b2c3d4e5f6") and link.own_author == "a1b2c3d4"
         codes = [f[0] for f in stub.received]
         assert codes[:3] == [1, 1, 22]  # lib APP_START, ours, DEVICE_QUERY and 6 in codes and 4 in codes
@@ -69,6 +70,10 @@ async def test_commands_golden_bytes(stub):
         await link.send_public("[robin] radio check")  # V1
         assert H("03000000f153655b726f62696e5d20726164696f20636865636b") in stub.received
         assert stub.transmitted == ["SparkNode: [robin] radio check"]
+
+        await link.send_public("Hallo", sender="BadPirate")  # V10 (SparkNode1.2 sender name)
+        assert H("03000000f1536548616c6c6f00426164506972617465") in stub.received
+        assert stub.transmitted[-1] == "BadPirate: Hallo"
 
         await link.post_room("[robin] hi room")  # V4, no echo
         assert H("02000000f15365a1b2c3d4e5f65b726f62696e5d20686920726f6f6d") in stub.received
@@ -361,3 +366,24 @@ async def test_hung_command_times_out():
 
     with pytest.raises(LinkError, match="timed out"):
         await asyncio.wait_for(link._cmd(never()), 5)
+
+
+def test_spark_node_version_and_sender_support():
+    from spark_bridge.nodelink import spark_node_version
+    assert spark_node_version("v1.18.0-SparkNode1") == (1, 0)
+    assert spark_node_version("v1.18.0-SparkNode1.1") == (1, 1)
+    assert spark_node_version("v1.18.0-SparkNode1.2") == (1, 2)
+    assert spark_node_version("v1.18.0-SparkNode1.10") == (1, 10)
+    assert spark_node_version("v1.18.0") is None and spark_node_version("") is None
+
+
+async def test_old_firmware_ignores_sender_name(stub):
+    stub.version = "v1.18.0-SparkNode1.1"
+    link = mklink(stub)
+    await link.connect()
+    try:
+        assert not link.supports_sender
+        await link.send_public("Hallo", sender="BadPirate")   # what an old node does with the trailer
+        assert stub.transmitted == ["SparkNode: Hallo"]
+    finally:
+        await link.close()

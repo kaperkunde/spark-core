@@ -69,8 +69,11 @@ the bridge adds no user permission system.
 |---|---|
 | `/spark status` | show this channel's settings and the link state |
 | `/spark admin on\|off` | allow `/spark cli`, `/spark health` and `/spark where` here. Turning admin on also turns `report` on the first time |
-| `/spark send none\|public\|room\|both` | Discord to mesh target |
-| `/spark prefix on\|off` | on: `[discord-name] text`; off: plain text, sent as the node itself |
+| `/spark send none\|public\|room\|both [confirm:True]` | Discord to mesh target. `public` and `both` first show a warning (below) and need **Confirm** (button) or `confirm:True` |
+| `/spark prefix on\|off` | on: the sender is named (Public: `<alias>: text` as the sender name, room: `[alias] text`); off: plain text, sent as the node itself |
+| `/spark alias set user:@user name:<mesh name>` | the name this Discord user has on the mesh (Manage Channels; no `:` or line breaks, at most 31 bytes, one user per name) |
+| `/spark alias list` | all aliases |
+| `/spark alias del user:@user` | remove an alias: the Discord display name is used again |
 | `/spark ratelimit none\|channel\|user [per_minute]` | no limit, or N messages/minute per channel or per user (default 3) |
 | `/spark receive none\|public\|room\|both` | mesh to Discord source copied into this channel |
 | `/spark report on\|off` | the daily health line (`BRIDGE_HEALTH_REPORT`, default 15:05 in `BRIDGE_TZ`) and link up/down notices here |
@@ -81,7 +84,25 @@ the bridge adds no user permission system.
 Examples:
 
 - Broad read-only channel: `/spark receive both` (send stays `none`).
-- Private admin channel: `/spark admin on`, `/spark send public`, `/spark prefix off`.
+- Private admin channel: `/spark admin on`, `/spark send public confirm:True`, `/spark prefix off`.
+
+**Sending to Public from Discord.** Enabling `send public` or `send both` shows this warning and
+changes nothing until it is confirmed:
+
+> - Sending to Public from Discord is designed for single-user convenience, not for mass sending or bots.
+> - Anyone who can write in this Discord channel will be able to send to Public using your station's credentials and identity.
+> - Don't enable it on public or shared Discord channels.
+
+The admin enabling it is the trust decision: there is no per-user allow list. Who enabled it,
+and when, is logged (a warning line in the bridge log and the `audit` table) and shown by
+`/spark status`. The rate limits apply as before.
+
+**Sender names.** With `prefix on`, a message from Discord is attributed to its author's alias
+(`/spark alias`), or else to their Discord display name with `:` and line breaks removed and cut
+to 31 bytes. On Public a SparkNode1.2 node sends it as the sender name, so the mesh shows
+`BadPirate: Hallo` rather than `<node name>: [BadPirate] Hallo`; an older node gets the
+`[name] text` tag. Room posts are authored by the room itself, so they keep the `[name] text` tag
+(with the alias).
 
 Behaviour details:
 
@@ -91,7 +112,7 @@ Behaviour details:
   posts, else `node <8 hex>`. Mentions are always disabled. No webhook permission: fallback to
   bot messages. Bot and webhook messages are never forwarded. No backfill on the first run.
 - Discord to mesh is cut on a UTF-8 character boundary: room posts 151 bytes, Public 160 bytes
-  minus `<node name>: `. A cut message gets a scissors reaction, a link-down message a plug, a
+  minus `<sender name>: ` (or `<node name>: `). A cut message gets a scissors reaction, a link-down message a plug, a
   rate-limited one an hourglass, a node error a cross. Nothing is queued. Attachments and embeds
   are ignored. Newlines become spaces.
 - `BRIDGE_PUBLIC_PER_MINUTE` / `BRIDGE_PUBLIC_BURST` is a separate global cap on Public transmissions

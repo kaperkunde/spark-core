@@ -24,7 +24,9 @@ async def test_client_constructs_with_group_and_commands():
     try:
         grp = client.tree.get_command("spark")
         names = {c.name for c in grp.commands}
-        assert names == {"status", "admin", "send", "prefix", "ratelimit", "receive", "report", "health", "cli", "where"}
+        assert names == {"status", "admin", "send", "prefix", "ratelimit", "receive", "report", "health", "cli",
+                         "where", "alias"}
+        assert {c.name for c in grp.get_command("alias").commands} == {"set", "list", "del"}
         assert client.intents.message_content
         assert client.guild_ok(1) and not client.guild_ok(2) and not client.guild_ok(None)
     finally:
@@ -70,13 +72,20 @@ class FakeIt:
         self.user = type("U", (), {"id": 9})()
         self.permissions = type("P", (), {"manage_channels": manage})()
         self.out: list[tuple[str, bool]] = []
+        self.views: list = []
+        self.edits: list = []
         it = self
 
         class R:
-            async def send_message(self, text, ephemeral=False, allowed_mentions=None): it.out.append((text, ephemeral))
+            async def send_message(self, text, ephemeral=False, allowed_mentions=None, view=None):
+                it.out.append((text, ephemeral))
+                it.views.append(view)
             async def defer(self, thinking=False): it.deferred = True
+            async def edit_message(self, content=None, view=None): it.edits.append(content)
         class F:
-            async def send(self, text, ephemeral=False, allowed_mentions=None): it.out.append((text, ephemeral))
+            async def send(self, text, ephemeral=False, allowed_mentions=None, view=None):
+                it.out.append((text, ephemeral))
+                it.views.append(view)
         self.response, self.followup = R(), F()
 
 
@@ -104,7 +113,10 @@ async def test_slash_commands_permissions_and_effects():
     assert "not allowed" in it.out[0][0]
 
     it = FakeIt()
-    await cmd("send")(it, ch(name="both", value="both"))
+    await cmd("send")(it, ch(name="both", value="both"))   # needs confirmation: warning + buttons
+    assert it.out[0][1] and "credentials and identity" in it.out[0][0] and it.views[0] is not None
+    assert br.store.get_channel(50) is None
+    await cmd("send")(it, ch(name="both", value="both"), True)
     await cmd("prefix")(it, ch(name="off", value=0))
     await cmd("ratelimit")(it, ch(name="user", value="user"), 4)
     await cmd("receive")(it, ch(name="public", value="public"))
@@ -165,3 +177,51 @@ async def test_startup_prune_and_channel_delete_event():
             await chat.notice(1111111111111111111, "x")
     finally:
         await client.close()
+
+
+async def test_confirm_button_and_alias_commands():
+    from discord import app_commands as ac
+    from spark_bridge.discordbot import ConfirmPublicView
+    cfg = Config(); cfg.discord.allowed_guild_ids = [1]
+    client = SparkClient(cfg)
+    node = type("N", (), {"connected": True, "node_name": "SparkNode", "version": "v", "own_author": "aa"})()
+    br = Bridge(Store(), node, client.chat, cfg)
+    client.bridge = br
+    grp = client.tree.get_command("spark")
+
+    it = FakeIt()
+    await grp.get_command("send").callback(it, ac.Choice(name="public", value="public"))
+    view = it.views[0]
+    assert isinstance(view, ConfirmPublicView) and view.target == "public"
+
+    other = FakeIt(); other.user = type("U", (), {"id": 10})()
+    assert not await view.interaction_check(other) and "Only the admin" in other.out[0][0]
+    no_perm = FakeIt(manage=False)
+    assert not await view.interaction_check(no_perm)
+    assert await view.interaction_check(FakeIt())
+
+    press = FakeIt()
+    await view.cancel.callback(press)
+    assert press.edits == ["Cancelled: send is unchanged."] and br.store.get_channel(50) is None
+    press = FakeIt()
+    await view.confirm.callback(press)
+    assert press.edits == ["Confirmed: send public."]
+    assert br.store.get_channel(50).send_target == "public"
+    assert br.store.last_audit(50, "send public on")[1] == 9
+    assert "Public enabled by <@9>" in press.out[0][0]
+
+    alias = grp.get_command("alias")
+    user = type("User", (), {"id": 77})()
+    it = FakeIt(manage=False)
+    await alias.get_command("set").callback(it, user, "Kev")
+    assert "Manage Channels" in it.out[0][0] and br.store.get_alias(77) is None
+    it = FakeIt()
+    await alias.get_command("set").callback(it, user, "Kev")
+    assert br.store.get_alias(77) == "Kev"
+    it = FakeIt(manage=False)
+    await alias.get_command("list").callback(it)
+    assert "<@77>: Kev" in it.out[0][0]
+    it = FakeIt()
+    await alias.get_command("del").callback(it, user)
+    assert br.store.get_alias(77) is None
+    await client.close()

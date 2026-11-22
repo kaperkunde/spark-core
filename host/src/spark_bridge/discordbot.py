@@ -1,7 +1,9 @@
 """discord.py layer: the only module that imports discord.py.
 
-Slash command group /spark. Configuration commands need Discord's Manage Channels permission
-in the channel (checked here from the interaction's resolved permissions). `/spark status`,
+Slash command group /spark. Configuration commands (and `/spark alias set|del`) need Discord's
+Manage Channels permission in the channel (checked here from the interaction's resolved
+permissions). Enabling `send public` or `send both` also needs a confirmation (button, or
+`confirm:True`) after a warning. `/spark status`,
 `/spark health`, `/spark cli` and `/spark where` follow the channel: anyone who can see an admin channel can use
 them. Channel visibility in Discord is the only access control.
 """
@@ -16,7 +18,7 @@ from typing import Awaitable, Callable
 import discord
 from discord import app_commands
 
-from .bridge import Bridge, BridgeError, ChannelGone, Inbound
+from .bridge import Bridge, BridgeError, ChannelGone, Inbound, NeedsConfirmation
 from .config import Config
 
 log = logging.getLogger("spark_bridge.discord")
@@ -112,6 +114,42 @@ class DiscordChat:
     async def notice(self, channel_id: int, text: str) -> None:
         ch = await self._channel(channel_id)
         await self._guard(channel_id, ch.send(text[:2000], allowed_mentions=NO_MENTIONS))
+
+
+class ConfirmPublicView(discord.ui.View):
+    """Confirm / Cancel under the Public-send warning. Only the admin who ran the command can
+    press it, and they still need Manage Channels when they do."""
+
+    def __init__(self, client: "SparkClient", owner_id: int, target: str, timeout: float = 120):
+        super().__init__(timeout=timeout)
+        self.client, self.owner_id, self.target = client, owner_id, target
+
+    async def interaction_check(self, it: discord.Interaction) -> bool:
+        if it.user.id != self.owner_id:
+            await it.response.send_message("Only the admin who ran the command can confirm it.", ephemeral=True)
+            return False
+        if not it.permissions.manage_channels:
+            await it.response.send_message("You need the Manage Channels permission here.", ephemeral=True)
+            return False
+        return True
+
+    @discord.ui.button(label="Confirm", style=discord.ButtonStyle.danger)
+    async def confirm(self, it: discord.Interaction, button: discord.ui.Button):
+        b = self.client.bridge
+        assert b
+        try:
+            b.configure(it.channel_id, it.guild_id, it.user.id, confirm=True, send_target=self.target)
+            text = b.status(it.channel_id)
+        except BridgeError as exc:
+            text = str(exc)
+        self.stop()
+        await it.response.edit_message(content=f"Confirmed: send {self.target}.", view=None)
+        await it.followup.send(text[:1900], allowed_mentions=NO_MENTIONS)
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
+    async def cancel(self, it: discord.Interaction, button: discord.ui.Button):
+        self.stop()
+        await it.response.edit_message(content="Cancelled: send is unchanged.", view=None)
 
 
 def onoff(v: bool) -> str:
@@ -216,21 +254,25 @@ def build_group(client: SparkClient) -> app_commands.Group:
             return
         if slow:
             await it.response.defer(thinking=True)
+        extra = {}
         try:
             text = await fn()
+        except NeedsConfirmation as exc:
+            text, ephemeral = str(exc), True
+            extra["view"] = ConfirmPublicView(client, it.user.id, exc.target)
         except BridgeError as exc:
             text, ephemeral = str(exc), True
         else:
             ephemeral = False
         text = text[:1900]
         if slow:
-            await it.followup.send(text, ephemeral=ephemeral, allowed_mentions=NO_MENTIONS)
+            await it.followup.send(text, ephemeral=ephemeral, allowed_mentions=NO_MENTIONS, **extra)
         else:
-            await it.response.send_message(text, ephemeral=ephemeral, allowed_mentions=NO_MENTIONS)
+            await it.response.send_message(text, ephemeral=ephemeral, allowed_mentions=NO_MENTIONS, **extra)
 
-    def setter(it: discord.Interaction, **changes) -> str:
+    def setter(it: discord.Interaction, confirm: bool = False, **changes) -> str:
         b = bridge()
-        b.configure(it.channel_id, it.guild_id, it.user.id, **changes)
+        b.configure(it.channel_id, it.guild_id, it.user.id, confirm=confirm, **changes)
         return b.status(it.channel_id)
 
     @group.command(name="status", description="Show this channel's bridge behaviour")
@@ -246,11 +288,12 @@ def build_group(client: SparkClient) -> app_commands.Group:
 
     @group.command(name="send", description="Discord to mesh: which mesh target this channel writes to")
     @app_commands.choices(target=TARGETS)
-    async def send(it: discord.Interaction, target: app_commands.Choice[str]):
-        async def f(): return setter(it, send_target=target.value)
+    @app_commands.describe(confirm="public/both: confirm the warning (anyone here can then send as your station)")
+    async def send(it: discord.Interaction, target: app_commands.Choice[str], confirm: bool = False):
+        async def f(): return setter(it, confirm=confirm, send_target=target.value)
         await guarded(it, True, f)
 
-    @group.command(name="prefix", description="Tag sent messages with [discord-name] (off = plain text, as the node)")
+    @group.command(name="prefix", description="Name the sender: Public sender name / room [alias] tag (off = as the node)")
     @app_commands.choices(state=ONOFF)
     async def prefix(it: discord.Interaction, state: app_commands.Choice[int]):
         async def f(): return setter(it, prefix=bool(state.value))
@@ -308,5 +351,24 @@ def build_group(client: SparkClient) -> app_commands.Group:
             out = await bridge().run_cli(it.channel_id, command)
             return f"`{command[:100]}`\n```\n{out[:1700]}\n```"
         await guarded(it, False, f, slow=True)
+
+    alias = app_commands.Group(name="alias", description="Mesh names (aliases) of Discord users", parent=group)
+
+    @alias.command(name="set", description="Set the name a Discord user posts under on the mesh")
+    @app_commands.describe(user="the Discord user", name="mesh name (no ':', at most 31 bytes)")
+    async def alias_set(it: discord.Interaction, user: discord.User, name: str):
+        async def f(): return bridge().alias_set(user.id, name, it.user.id)
+        await guarded(it, True, f)
+
+    @alias.command(name="list", description="List the mesh aliases of Discord users")
+    async def alias_list(it: discord.Interaction):
+        async def f(): return bridge().alias_list()
+        await guarded(it, False, f)
+
+    @alias.command(name="del", description="Remove a user's alias (their display name is used again)")
+    @app_commands.describe(user="the Discord user")
+    async def alias_del(it: discord.Interaction, user: discord.User):
+        async def f(): return bridge().alias_del(user.id, it.user.id)
+        await guarded(it, True, f)
 
     return group
