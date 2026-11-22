@@ -70,3 +70,9 @@ jobs:
 
       - name: Build ${{ matrix.environment }}
         run: pio run -e ${{ matrix.environment }}
+
+      - name: SparkNode DFU package and OTA-safe bootloader
+        if: matrix.environment == 'SparkNode_P1'
+        run: |
+          pio run -e SparkNode_P1 -t dfu_zip
+          spark/bootloader/build.sh

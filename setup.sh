@@ -408,6 +408,7 @@ ok "Wrote $ENV_FILE (mode 600, gitignored)."
 NODE_UF2="$ROOT/.pio/build/$NODE_ENV/firmware.uf2"
 KIDS_FACTORY="$ROOT/.pio/build/$KIDS_ENV/firmware-merged.bin"
 KIDS_APP="$ROOT/.pio/build/$KIDS_ENV/firmware.bin"
+NODE_ZIP="$ROOT/.pio/build/$NODE_ENV/firmware-dfu.zip"
 
 find_uf2_drive() {
   local d
@@ -442,6 +443,60 @@ flash_node() {
   ok "SparkNode firmware copied. The node reboots by itself."
 }
 
+# Update over Bluetooth: spark-bridge update (host/src/spark_bridge/update.py) pauses a running
+# bridge, checks package and node, sends dfu, transfers to the bootloader and verifies the build.
+update_node_ble() {
+  title "4. Update SparkNode over Bluetooth"
+  local venv="$ROOT/host/.venv"
+  if [ ! -x "$venv/bin/spark-bridge" ]; then
+    info "spark-bridge is not installed yet; installing it into $venv."
+    need_python
+    [ -x "$venv/bin/python" ] || run python3 -m venv "$venv"
+    run "$venv/bin/pip" install --quiet -e "$ROOT/host"
+  fi
+  info "The node must run SparkNode2 or later (SparkNode1 has no dfu command: use usb once)."
+  info "The bridge host must be paired with the node (BRIDGE_TRANSPORT=ble) or connected by USB."
+  info "Battery at least 3.7 V; the transfer takes about 3 minutes; keep this computer awake."
+  run "$venv/bin/spark-bridge" update --env "$ENV_FILE" "$NODE_ZIP" || \
+    warn "Update not completed. The message above says whether the old app is intact. See spark/README.md 'Update over Bluetooth'."
+}
+
+# One-time: replace the node's UF2 bootloader with the OTA-safe Spark build (spark/bootloader).
+install_bootloader() {
+  local bl="$ROOT/out/spark/bootloader/update-xiao_nrf52840_ble_bootloader-0.11.0-spark1_nosd.uf2" drive="" i
+  info ""
+  info "${B}OTA-safe bootloader (optional, one time, over USB)${N}"
+  info "  The stock bootloader falls back to USB-only mode when a Bluetooth update breaks off: on a"
+  info "  roof that means a ladder. The Spark build (Adafruit bootloader 0.11.0 + DEFAULT_TO_OTA_DFU)"
+  info "  then keeps waiting for a Bluetooth retry instead. Double reset still opens XIAO-BOOT."
+  info "  Risks: an interrupted bootloader copy can brick the node (recovery: an SWD programmer);"
+  info "  room posts stored on the node may be lost (the copy uses part of the post store)."
+  info "  Already installed? Skip it (INFO_UF2.TXT on XIAO-BOOT shows UF2 Bootloader 0.11.0-spark1)."
+  yesno "Install the OTA-safe bootloader now?" n || return 0
+  run "$ROOT/spark/bootloader/build.sh" || die "Bootloader build failed; nothing was flashed."
+  if [ "$DRY_RUN" = 1 ]; then
+    printf '%s  + wait for the UF2 drive, check Board-ID nRF52840-SeeedXiao-v1 in INFO_UF2.TXT, cp %s <drive>/%s\n' "$D" "$bl" "$N"
+    return
+  fi
+  info "Connect the node over USB with the batteries in, and double-press its reset button."
+  for i in $(seq 1 120); do drive="$(find_uf2_drive || true)"; [ -n "$drive" ] && break; sleep 1; done
+  [ -n "$drive" ] || { warn "No UF2 drive found; bootloader not installed."; return 0; }
+  cat "$drive/INFO_UF2.TXT"
+  if ! grep -q "Board-ID: nRF52840-SeeedXiao-v1" "$drive/INFO_UF2.TXT"; then
+    warn "This bootloader reports a different Board-ID: the Spark build is not for this board. Not installed."
+    return 0
+  fi
+  if grep -q "0.11.0-spark1" "$drive/INFO_UF2.TXT"; then ok "The OTA-safe bootloader is already installed."; return 0; fi
+  local typed=""
+  read -r -p "Type 'install' to write the bootloader (do not unplug or reset for 30 s): " typed || true
+  [ "$typed" = install ] || { info "Not installed."; return 0; }
+  cp "$bl" "$drive/" || true   # the drive goes away when the copy completes
+  sync || true
+  info "Waiting 15 s while the new bootloader is copied into place..."; sleep 15
+  ok "Done. To check: double-press reset; INFO_UF2.TXT must show 0.11.0-spark1. Then press reset once."
+  info "If room posts look damaged afterwards: node console 'posts reset' (USB)."
+}
+
 read_node_key() {
   local port key
   info "The kids' devices need the SparkNode's public key."
@@ -463,9 +518,21 @@ if [ "$DO_NODE" = 1 ] || [ "$DO_KIDS" = 1 ]; then ensure_pio; fi
 if [ "$DO_NODE" = 1 ]; then
   title "3. Build SparkNode"
   pio_run run -e "$NODE_ENV"
-  pio_run run -e "$NODE_ENV" -t create_uf2
-  [ "$DRY_RUN" = 1 ] || ok "Built $NODE_UF2"
-  flash_node
+  pio_run run -e "$NODE_ENV" -t create_uf2 -t dfu_zip
+  [ "$DRY_RUN" = 1 ] || ok "Built $NODE_UF2 and $NODE_ZIP"
+  install_bootloader
+  info ""
+  info "Install SparkNode:"
+  info "  usb  copy the UF2 to the node's XIAO-BOOT drive (needs a USB cable; always works)"
+  info "  ble  update over Bluetooth with spark-bridge update (the node must already run SparkNode2"
+  info "       or later; the bridge is paused while it runs)"
+  info "  skip do it later"
+  ask_match NODE_INSTALL "How" "usb" '^(usb|ble|skip)$' "Type usb, ble or skip."
+  case "$NODE_INSTALL" in
+    usb) flash_node ;;
+    ble) update_node_ble ;;
+    *) info "Later: copy $NODE_UF2 to the UF2 drive, or: host/.venv/bin/spark-bridge update $NODE_ZIP" ;;
+  esac
 fi
 
 flash_kids() {
@@ -583,7 +650,7 @@ install_bridge() {
 
 title "Done"
 info "Configuration: $ENV_FILE"
-[ "$DO_NODE" = 1 ] && info "SparkNode: on the node's USB console 'ver' shows v1.18.0-SparkNode1."
+[ "$DO_NODE" = 1 ] && info "SparkNode: on the node's USB console 'ver' shows v1.18.0-SparkNode2. Later updates: ./setup.sh (ble)."
 [ "$DO_BRIDGE" = 1 ] && info "Spark Bridge: in Discord, run /spark status in a channel, then /spark receive both."
 [ "$DO_KIDS" = 1 ] && info "SparkKids: type a name on the T-Deck; it logs in to the room by itself."
 info "More: spark/README.md"

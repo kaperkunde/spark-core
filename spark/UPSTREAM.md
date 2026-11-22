@@ -9,10 +9,11 @@
 
 ## Versions and tags
 
-Each part has its own counter: **SparkNode1**, **SparkBridge1**, **SparkKids1**, and so on. The
-MeshCore base stays visible: the node reports `v1.18.0-SparkNode1`, SparkKids shows
-`SparkKids1 (MeshCore v1.18.0)`, the bridge package is `spark-bridge` version `1`
-(`spark-bridge --version` prints `SparkBridge1`). Git tags use the same names (`SparkNode1`,
+Each part has its own counter: **SparkNode2**, **SparkBridge2**, **SparkKids1**, and so on. The
+MeshCore base stays visible: the node reports `v1.18.0-SparkNode2`, SparkKids shows
+`SparkKids1 (MeshCore v1.18.0)`, the bridge package is `spark-bridge` version `2`
+(`spark-bridge --version` prints `SparkBridge2`). SparkNode2 and SparkBridge2 add Bluetooth
+updates (`dfu`, `spark-bridge update`); the node also reports a build id (`get build`). Git tags use the same names (`SparkNode1`,
 `SparkBridge1`, `SparkKids1`). Version strings live in `variants/spark_p1/platformio.ini`
 (`FIRMWARE_VERSION`), `variants/spark_tdeck/platformio.ini` (`KIDS_FW_VERSION`) and
 `host/pyproject.toml` + `host/src/spark_bridge/__init__.py`.
@@ -24,6 +25,7 @@ MeshCore base stays visible: the node reports `v1.18.0-SparkNode1`, SparkKids sh
 | `examples/simple_room_server/MyMesh.h` | includes, `friend class PostPersistAccess/HostLink/MemberDirAccess`, overrides (`searchChannelsByHash`, `onGroupDataRecv`, `onAdvertRecv`, `onTraceRecv`) | `ROOM_PERSIST_POSTS`, `WITH_HOSTLINK`, `ROOM_MEMBER_DIR` |
 | `examples/simple_room_server/MyMesh.cpp` | `storePost` notify, `begin` restore, `loop` tick, `handleCommand` spark commands, repeat branch, login + `handleRequest` member hooks, new-install path hash mode default | the five above, `SPARK_PATH_HASH_MODE` |
 | `examples/simple_room_server/main.cpp` | `hostlink_setup()`, serial demux for `<` frames | `WITH_HOSTLINK` |
+| `src/helpers/nrf52/SerialBLEInterface.cpp` | `onSecured`: one Service Changed indication per boot | `SPARK_SERVICE_CHANGED` |
 | `.gitignore`, `README.md` | `.env` and local tool dirs ignored; Spark introduction on top of the MeshCore README | - |
 
 Everything else is new: `examples/spark_room/`, `examples/spark_kids/`, `variants/spark_p1/`,
@@ -42,3 +44,19 @@ instead of stacking redefinitions.
 4. Public channel receive/send on the room server.
 5. HostLink itself (larger; offer after it has run for a while).
 6. Repeat toggle: upstream removed it on purpose; propose only as a build flag.
+7. Service Changed on the first secured connection (`SerialBLEInterface.cpp`): useful for every
+   nRF52 BLE firmware whose GATT table can change with an update.
+
+## Bootloader
+
+`spark/bootloader/` builds [Adafruit_nRF52_Bootloader](https://github.com/adafruit/Adafruit_nRF52_Bootloader)
+tag `0.11.0` (pinned commit `c67f0bc`) for `xiao_nrf52840_ble` with S140 7.3.0,
+`DEFAULT_TO_OTA_DFU=1` and `OTA_DFU_ONLY_WITHOUT_APP=1` from
+`0001-ota-dfu-only-without-app.patch`. Version string `0.11.0-spark1` (a local tag, so the
+Makefile's `git describe` yields it). The patch is a candidate for an upstream PR: upstream's
+`DEFAULT_TO_OTA_DFU` also turns double reset and the app's UF2/serial DFU requests into OTA DFU,
+so a board with that flag cannot reach its UF2 drive any more. To move to a newer release:
+change `TAG`/`COMMIT`/`SPARK_TAG` in `build.sh`, re-apply the patch, and repeat the bench tests
+H1, H2, T5 and T6 in OTA-TESTS.md. Notes: 0.11.0's `board.cmake`/Makefile default for nRF52840
+is S140 6.1.1, so `SD_VERSION=7.3.0` must stay explicit; its Makefile needs GNU sed for the
+version number, `build.sh` passes it.
