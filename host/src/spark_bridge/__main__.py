@@ -17,7 +17,7 @@ def build_parser() -> argparse.ArgumentParser:
         prog="spark-bridge",
         description="Spark Bridge: connect a SparkNode (MeshCore room server with HostLink) to Discord. "
                     "Settings and DISCORD_TOKEN come from the repository's .env (see .env.example). "
-                    "'spark-bridge update <zip>' updates the node over Bluetooth (see --help there).")
+                    "'spark-bridge update <zip>' updates the node over Bluetooth, 'spark-bridge scan' lists advertising nodes and bootloaders (see --help there).")
     ap.add_argument("--env", "-e", default=None,
                     help="path to the .env file (default: $SPARK_ENV_FILE, ./.env, or the repository's .env)")
     ap.add_argument("--config", "-c", default=None, help="legacy: a config.toml instead of .env")
@@ -100,6 +100,9 @@ def main(argv: list[str] | None = None) -> int:
     if argv[:1] == ["update"]:
         from .update import main as update_main
         return update_main(argv[1:])
+    if argv[:1] == ["scan"]:
+        from .update import scan_main
+        return scan_main(argv[1:])
     args = build_parser().parse_args(argv)
     logging.basicConfig(level=args.log_level, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     logging.getLogger("discord").setLevel(logging.WARNING)

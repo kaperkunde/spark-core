@@ -329,6 +329,40 @@ async def _run_locked(args, cfg, pkg: dfu.Package) -> int:
     return EXIT_OK if await verify(cfg.node, pkg, args.verify_seconds) else EXIT_FAILED
 
 
+async def scan(seconds: float) -> list[tuple[str, str, str, int]]:
+    """Passive scan: every SparkNode-related advertiser as (kind, address, name, rssi), where kind
+    is "app" (Nordic UART service) or "bootloader" (DFU service). Read-only."""
+    from bleak import BleakScanner
+
+    kw = {"cb": {"use_bdaddr": True}} if sys.platform == "darwin" else {}
+    seen: dict[str, tuple[str, str, str, int]] = {}
+
+    def on_adv(device, adv):
+        uuids = [u.lower() for u in adv.service_uuids or []]
+        kind = "bootloader" if dfu.is_bootloader_adv(uuids, adv.local_name) else (
+            "app" if dfu.NUS_SERVICE in uuids else "")
+        if kind:
+            seen[device.address] = (kind, device.address, adv.local_name or device.name or "", adv.rssi)
+
+    async with BleakScanner(detection_callback=on_adv, **kw):
+        await asyncio.sleep(seconds)
+    return sorted(seen.values())
+
+
+def scan_main(argv: list[str]) -> int:
+    ap = argparse.ArgumentParser(prog="spark-bridge scan",
+                                 description="Passive BLE scan: SparkNode app (NUS) and DFU bootloader advertisers. "
+                                             "A node connected to a host does not advertise.")
+    ap.add_argument("--seconds", type=float, default=15.0)
+    args = ap.parse_args(argv)
+    rows = asyncio.run(scan(args.seconds))
+    for kind, addr, name, rssi in rows:
+        say(f"{kind:10s} {addr:38s} {rssi:4d} dBm  {name}")
+    if not rows:
+        say("nothing advertising (a connected node does not advertise; is the bridge connected?)")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     logging.basicConfig(level=args.log_level, format="%(asctime)s %(levelname)s %(name)s: %(message)s")

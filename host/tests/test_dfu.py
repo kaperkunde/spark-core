@@ -368,3 +368,19 @@ async def test_start_timeout_before_start_retries_in_same_session():
 
     await transfer(connect, pkg_of(), timeouts=FAST, sleep=nosleep, attempts=2)
     assert dev.mode == "app" and calls["n"] == 2
+
+
+async def test_dirty_session_spark_bootloader_resets_and_completes():
+    # an earlier run broke off mid-transfer (tool killed): the session still expects data
+    dev = FakeDevice(spark=True)
+    dev.state, dev.size, dev.app_valid = "rx", 4000, False
+    await run(dev, pkg_of(), attempts=2)
+    assert dev.resets == ["to_ota"] and dev.mode == "app"
+
+
+async def test_dirty_session_stock_bootloader_is_not_reset():
+    dev = FakeDevice()
+    dev.state, dev.size, dev.app_valid = "rx", 4000, False
+    with pytest.raises(DfuError, match="broke off") as ei:
+        await run(dev, pkg_of(), attempts=3)
+    assert ei.value.app_erased and bytes([6]) not in dev.writes

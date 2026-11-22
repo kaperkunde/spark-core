@@ -292,7 +292,16 @@ class DfuSession:
         # Start: from the accepted response on, the old application is erased
         await self.t.write_control(bytes([OP_START, IMAGE_APPLICATION]))
         await self.t.write_packet(struct.pack("<III", 0, 0, len(img)))
-        await self._response(OP_START, self.to.start, "Start")
+        try:
+            await self._response(OP_START, self.to.start, "Start")
+        except DfuError as exc:
+            if "invalid state" in str(exc):
+                # this bootloader session already accepted a Start (an earlier transfer broke
+                # off): the old app is gone and only a new session can take a new Start
+                self.started = True
+                raise DfuError("Start refused: an earlier transfer in this bootloader session broke off",
+                               app_erased=True) from None
+            raise
         self.started = True
 
         await self.t.write_control(bytes([OP_INIT, 0]))

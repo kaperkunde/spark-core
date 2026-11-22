@@ -176,7 +176,9 @@ def build_id():
     untracked = git("ls-files", "--others", "--exclude-standard", "--", "src", "examples", "variants", "lib",
                     "spark", "boards")
     fp = hashlib.sha256()
-    for part in (head.encode(), diff, untracked, repr(sorted(flags.items())).encode(),
+    # SPARK_BUILD_SALT (environment): a new build id for an otherwise identical build (OTA tests)
+    salt = os.environ.get("SPARK_BUILD_SALT", "").encode()
+    for part in (head.encode(), diff, untracked, salt, repr(sorted(flags.items())).encode(),
                  repr(env.get("BUILD_FLAGS", [])).encode()):  # noqa: F821
         fp.update(part)
         fp.update(b"\0")
