@@ -5,8 +5,8 @@ It turns one solar roof node into a hub for your household and your neighbourhoo
 
 | Part | Version | What it is |
 |---|---|---|
-| **SparkNode** | SparkNode1.1 (`v1.18.0-SparkNode1.1`) | Firmware for a SenseCAP Solar Node P1 on your roof: a MeshCore **room** with store-and-forward for your own people, and a **relay** that strengthens the local mesh. |
-| **Spark Bridge** | SparkBridge1.1 (`spark-bridge 1.1`) | A small Python service on a Raspberry Pi or computer near the node. It links the node to **Discord**, one-way or two-way, with MeshCore Public and with the SparkNode room. |
+| **SparkNode** | SparkNode1.2 (`v1.18.0-SparkNode1.2`) | Firmware for a SenseCAP Solar Node P1 on your roof: a MeshCore **room** with store-and-forward for your own people, and a **relay** that strengthens the local mesh. |
+| **Spark Bridge** | SparkBridge1.2 (`spark-bridge 1.2`) | A small Python service on a Raspberry Pi or computer near the node. It links the node to **Discord**, one-way or two-way, with MeshCore Public and with the SparkNode room. |
 | **SparkKids** | SparkKids1 | Firmware for a **LilyGO T-Deck Plus**: a simple touch messenger with location sharing for kids, or anyone who doesn't like fancy tech. A "dumb phone" without a service plan. |
 
 ```
@@ -111,7 +111,12 @@ SparkNode is the stock MeshCore room server with these additions, each behind a 
 
 With none of the flags the room server builds as stock. The protocol is in [HOSTLINK.md](HOSTLINK.md).
 
-**Relay.** Turn relaying on once on the node: `set repeat on`.
+**Relay.** Turn relaying on once on the node: `set repeat on`. From SparkNode1.2 the relay applies
+the same filters as a MeshCore repeater: a flood whose region is denied (`region denyf ...`; with
+`region denyf *` un-scoped floods are not relayed) and, with `set loop.detect minimal|moderate|strict`,
+a flood that already passed this node too often are not forwarded. Every flood scope the relay should
+carry must be in the node's region list and allowed (e.g. the kids' and the room's scope). This only
+affects forwarding: the room still receives and answers everything, and its own posts go out.
 
 **Memory layout.** The env uses the `nrf52840_s140_v7_extrafs.ld` linker script: the app may use
 up to 708,608 bytes and the 100 KB region `0xD4000..0xED000` holds the post store. InternalFS
@@ -136,7 +141,7 @@ in a frame and never stored by the bridge.
 **Parents' commands** (USB, LoRa admin login, or `/spark cli`): `members`, `member del <prefix|name>`,
 `member name <prefix> <name>`, `where`, `where <name>`.
 
-**Version.** `ver` prints `v1.18.0-SparkNode1.1 (Build: <date>) <build id>`; `get build` prints the version and build id.
+**Version.** `ver` prints `v1.18.0-SparkNode1.2 (Build: <date>) <build id>`; `get build` prints the version and build id.
 
 ## Update over Bluetooth
 
@@ -164,7 +169,7 @@ done, anyone in Bluetooth range could send it firmware; the window is the few mi
 update. SparkNode1.1 also sends a Service Changed indication on the first secured connection after
 each boot, so bonded hosts re-read the GATT table after an update.
 
-**Node commands.** `dfu [force]`, `get build` (`> v1.18.0-SparkNode1.1 <git hash>[+]-<UTC time>`;
+**Node commands.** `dfu [force]`, `get build` (`> v1.18.0-SparkNode1.2 <git hash>[+]-<UTC time>`;
 `+` = built from uncommitted changes), `ver` (with the build id), `posts reset` (USB only:
 erase all stored room posts).
 
@@ -229,6 +234,10 @@ See [host/README.md](../host/README.md) for the Discord setup, the per-channel `
 and testing without hardware. In short: create a dedicated Discord bot, put its token and your
 server id in `.env`, pair the node once over Bluetooth, start the service, then in a channel run
 `/spark receive both` (read-only mirror) or `/spark send room` (two-way with the room).
+Discord users post to the mesh under an alias (`/spark alias set`) or their display name; on
+Public a SparkNode1.2 node sends it as the sender name (`BadPirate: Hallo`). Enabling
+`/spark send public` (or `both`) asks for a confirmation after a warning: anyone in that Discord
+channel can then send to Public as your station.
 
 ## SparkKids
 

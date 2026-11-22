@@ -3,11 +3,11 @@
 **This fork adds Spark to [MeshCore](https://github.com/meshcore-dev/MeshCore) v1.18.** Spark turns
 one solar roof node into a hub for your own people and devices, and a relay that helps the local mesh.
 
-- **SparkNode** (SparkNode1.1): firmware for a [SenseCAP Solar Node P1](https://www.seeedstudio.com/SenseCAP-Solar-Node-P1-for-Meshtastic-LoRa-p-6425.html)
+- **SparkNode** (SparkNode1.2): firmware for a [SenseCAP Solar Node P1](https://www.seeedstudio.com/SenseCAP-Solar-Node-P1-for-Meshtastic-LoRa-p-6425.html)
   on your roof. It is a MeshCore **room** with store-and-forward, so your tribe can talk even when
   they are not online at the same time, and a **relay** that strengthens the mesh. Other
   MeshCore-capable boards can work too.
-- **Spark Bridge** (SparkBridge1.1): a service on a Raspberry Pi or computer near the roof node. It
+- **Spark Bridge** (SparkBridge1.2): a service on a Raspberry Pi or computer near the roof node. It
   connects the SparkNode room and MeshCore Public with **Discord**, one-way or two-way (more
   platforms later).
 - **SparkKids** (SparkKids1): firmware for the **LilyGO T-Deck Plus**: a simple touch messenger

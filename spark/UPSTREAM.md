@@ -9,12 +9,15 @@
 
 ## Versions and tags
 
-Each part has its own counter: **SparkNode1.1**, **SparkBridge1.1**, **SparkKids1**, and so on. The
-MeshCore base stays visible: the node reports `v1.18.0-SparkNode1.1`, SparkKids shows
-`SparkKids1 (MeshCore v1.18.0)`, the bridge package is `spark-bridge` version `1.1`
-(`spark-bridge --version` prints `SparkBridge1.1`). SparkNode1.1 and SparkBridge1.1 add Bluetooth
-updates (`dfu`, `spark-bridge update`); the node also reports a build id (`get build`). Git tags use the same names (`SparkNode1`,
-`SparkBridge1`, `SparkKids1`, then `SparkNode1.1`, `SparkBridge1.1`). Version strings live in `variants/spark_p1/platformio.ini`
+Each part has its own counter: **SparkNode1.2**, **SparkBridge1.2**, **SparkKids1**, and so on. The
+MeshCore base stays visible: the node reports `v1.18.0-SparkNode1.2`, SparkKids shows
+`SparkKids1 (MeshCore v1.18.0)`, the bridge package is `spark-bridge` version `1.2`
+(`spark-bridge --version` prints `SparkBridge1.2`). SparkNode1.1 and SparkBridge1.1 add Bluetooth
+updates (`dfu`, `spark-bridge update`); the node also reports a build id (`get build`).
+SparkNode1.2 and SparkBridge1.2 add the HostLink sender name (Discord aliases on Public), the
+confirmation for Discord -> Public send, and the repeater's region/loop checks in the room
+server's relay. Git tags use the same names (`SparkNode1`, `SparkBridge1`, `SparkKids1`, then
+`SparkNode1.1`, `SparkBridge1.1`, `SparkNode1.2`, `SparkBridge1.2`). Version strings live in `variants/spark_p1/platformio.ini`
 (`FIRMWARE_VERSION`), `variants/spark_tdeck/platformio.ini` (`KIDS_FW_VERSION`) and
 `host/pyproject.toml` + `host/src/spark_bridge/__init__.py`.
 
@@ -23,6 +26,8 @@ updates (`dfu`, `spark-bridge update`); the node also reports a build id (`get b
 | File | Hook | Flag |
 |---|---|---|
 | `examples/simple_room_server/MyMesh.h` | includes, `friend class PostPersistAccess/HostLink/MemberDirAccess`, overrides (`searchChannelsByHash`, `onGroupDataRecv`, `onAdvertRecv`, `onTraceRecv`) | `ROOM_PERSIST_POSTS`, `WITH_HOSTLINK`, `ROOM_MEMBER_DIR` |
+| `examples/simple_room_server/MyMesh.cpp` | `allowPacketForward`: region (`region denyf`) and `loop.detect` checks as in `simple_repeater` (not behind a flag: an upstream bug fix, PR candidate) | - |
+| `src/helpers/RoutingPolicy.h` | `mesh::isFloodLooped()`: the repeater's loop check as a pure function, tested in `test/test_routing_policy` | - |
 | `examples/simple_room_server/MyMesh.cpp` | `storePost` notify, `begin` restore, `loop` tick, `handleCommand` spark commands, repeat branch, login + `handleRequest` member hooks, new-install path hash mode default | the five above, `SPARK_PATH_HASH_MODE` |
 | `examples/simple_room_server/main.cpp` | `hostlink_setup()`, serial demux for `<` frames | `WITH_HOSTLINK` |
 | `src/helpers/nrf52/SerialBLEInterface.cpp` | `onSecured`: one Service Changed indication per boot | `SPARK_SERVICE_CHANGED` |
@@ -37,14 +42,16 @@ instead of stacking redefinitions.
 
 ## PR candidates (one commit each, most to least likely to be accepted)
 
-1. Clock floor after reboot for room servers (part of the persistence code; split it when
+1. Room server relay: drop denied-region floods and loops as the repeater does (`allowPacketForward`,
+   `mesh::isFloodLooped`); a plain bug fix.
+2. Clock floor after reboot for room servers (part of the persistence code; split it when
    proposing: posts are otherwise invisible to clients after a power cycle).
-2. Room post persistence behind `ROOM_PERSIST_POSTS`.
-3. `CompanionProtocol.h`: share the frame constants instead of keeping them private to `companion_radio/MyMesh.cpp`.
-4. Public channel receive/send on the room server.
-5. HostLink itself (larger; offer after it has run for a while).
-6. Repeat toggle: upstream removed it on purpose; propose only as a build flag.
-7. Service Changed on the first secured connection (`SerialBLEInterface.cpp`): useful for every
+3. Room post persistence behind `ROOM_PERSIST_POSTS`.
+4. `CompanionProtocol.h`: share the frame constants instead of keeping them private to `companion_radio/MyMesh.cpp`.
+5. Public channel receive/send on the room server.
+6. HostLink itself (larger; offer after it has run for a while).
+7. Repeat toggle: upstream removed it on purpose; propose only as a build flag.
+8. Service Changed on the first secured connection (`SerialBLEInterface.cpp`): useful for every
    nRF52 BLE firmware whose GATT table can change with an update.
 
 ## Bootloader

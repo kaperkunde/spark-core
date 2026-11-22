@@ -120,9 +120,9 @@ TEST(Layout, DeviceInfoIs82Bytes) {
 
 TEST(Layout, DeviceInfoKeepsA20ByteVersion) {
   uint8_t out[MAX_FRAME];
-  DeviceInfo d = {"20 Nov 2026", "Seeed SenseCAP Solar P1", "v1.18.0-SparkNode1.1", 1, 0};
+  DeviceInfo d = {"20 Nov 2026", "Seeed SenseCAP Solar P1", "v1.18.0-SparkNode1.2", 1, 0};
   ASSERT_EQ(82u, buildDeviceInfo(out, d));
-  EXPECT_EQ(0, memcmp(&out[8 + 12 + 40], "v1.18.0-SparkNode1.1", 20));
+  EXPECT_EQ(0, memcmp(&out[8 + 12 + 40], "v1.18.0-SparkNode1.2", 20));
   EXPECT_EQ(1, out[80]);
 }
 

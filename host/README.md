@@ -1,4 +1,4 @@
-# Spark Bridge (SparkBridge1.1)
+# Spark Bridge (SparkBridge1.2)
 
 The Discord service of [Spark](../spark/README.md). It connects to a SparkNode (MeshCore room
 server with the HostLink firmware) over BLE, USB serial or TCP (stub node) and bridges the mesh

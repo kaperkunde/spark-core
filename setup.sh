@@ -650,7 +650,7 @@ install_bridge() {
 
 title "Done"
 info "Configuration: $ENV_FILE"
-[ "$DO_NODE" = 1 ] && info "SparkNode: on the node's USB console 'ver' shows v1.18.0-SparkNode1.1. Later updates: ./setup.sh (ble)."
+[ "$DO_NODE" = 1 ] && info "SparkNode: on the node's USB console 'ver' shows v1.18.0-SparkNode1.2. Later updates: ./setup.sh (ble)."
 [ "$DO_BRIDGE" = 1 ] && info "Spark Bridge: in Discord, run /spark status in a channel, then /spark receive both."
 [ "$DO_KIDS" = 1 ] && info "SparkKids: type a name on the T-Deck; it logs in to the room by itself."
 info "More: spark/README.md"
