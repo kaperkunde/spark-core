@@ -27,7 +27,8 @@ MeshCore base stays visible: the node reports `v1.18.0-SparkNode1`, SparkKids sh
 | `.gitignore`, `README.md` | `.env` and local tool dirs ignored; Spark introduction on top of the MeshCore README | - |
 
 Everything else is new: `examples/spark_room/`, `examples/spark_kids/`, `variants/spark_p1/`,
-`variants/spark_tdeck/`, `test/test_spark_*`, `spark/`, `host/`, `setup.sh`, `.env.example`.
+`variants/spark_tdeck/`, `test/test_spark_*`, `spark/`, `host/`, `setup.sh`, `.env.example`,
+`.github/workflows/spark.yml` (CI: `native_spark`, bridge pytest, both firmware builds).
 No upstream ini file is edited; the root `platformio.ini` globs `variants/*/platformio.ini`.
 `spark/pio_env.py` replaces inherited `-D` definitions (e.g. `LORA_SF`) with the `.env` values
 instead of stacking redefinitions.
