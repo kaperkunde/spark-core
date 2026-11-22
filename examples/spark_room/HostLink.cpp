@@ -1,0 +1,686 @@
+#include "HostLink.h"
+
+#ifdef WITH_HOSTLINK
+
+#include "../simple_room_server/MyMesh.h"
+#include "CompanionProtocol.h"
+#include "HostLinkCodec.h"
+#include "UsbFrameInterface.h"
+#include "HostPosts.h"
+#include "PublicChannel.h"
+#ifdef ROOM_PERSIST_POSTS
+  #include "PostPersist.h"
+#endif
+#ifdef HOSTLINK_BLE
+  #include <helpers/nrf52/SerialBLEInterface.h>
+#endif
+
+#define SPARK_PREFS_FILE   "/spark_hl"
+#define SPARK_PREFS_MAGIC  0x4C485053u   // "SPHL"
+
+using spark::PUBLIC_CHANNEL_SECRET;
+
+class HostLink {
+public:
+  static const int TR_USB = 0;
+  static const int TR_BLE = 1;
+  static const int NUM_TR = 2;
+
+  void begin(MyMesh& mesh);
+  void loop();
+  int searchChannels(const uint8_t* hash, mesh::GroupChannel channels[], int max_matches);
+  void groupRecv(mesh::Packet* packet, uint8_t type, uint8_t* data, size_t len);
+  void advertRecv(const mesh::Identity& id, const uint8_t* app_data, size_t app_data_len);
+  void noteName(const uint8_t* pubkey, const char* name, uint8_t adv_type, bool has_loc, int32_t lat, int32_t lon);
+  bool usbByte(uint8_t c, bool line_empty) { return _usb.feedByte(c, line_empty); }
+  void postStored();
+  bool command(uint32_t sender_timestamp, const char* command, char* reply);
+  void traceRecv(mesh::Packet* packet, uint32_t tag, uint32_t auth, uint8_t flags, const uint8_t* snrs,
+                 const uint8_t* hashes, uint8_t path_len);
+
+private:
+  // ---- spark prefs (InternalFS /spark_hl): u32 magic, u8 version, u32 ble_pin (0 = unset), u8 ble_enabled
+  uint32_t _ble_pin = 0;
+  bool _ble_enabled = true;
+  bool _ble_running = false;
+  static const unsigned long BLE_START_DELAY_MS = 30000;
+  void startBle();
+  void loadPrefs();
+  bool savePrefs();
+#ifdef HOSTLINK_BLE
+  SerialBLEInterface _ble;
+#endif
+
+  MyMesh* _m = nullptr;
+  UsbFrameInterface _usb;
+  BaseSerialInterface* _tr[NUM_TR] = { nullptr, nullptr };
+
+  uint8_t _in[hl::MAX_FRAME + 1];
+  uint8_t _out[hl::MAX_FRAME + 4];
+  char _cmd[hl::MAX_CHAN_TEXT + 1];
+  char _reply[200];
+
+  // room posts: replay cursor (RAM only, reset by APP_START) and host-origin skip list
+  uint32_t _post_cursor = 0;
+  bool _suppress_push = false;
+
+  // Public channel: received messages wait in a RAM ring (oldest dropped, lost on reboot)
+  struct ChanMsg {
+    int8_t snr_x4;
+    uint8_t path_len;
+    uint32_t timestamp;
+    uint8_t text_len;
+    char text[hl::MAX_CHAN_FRAME_TEXT];
+  };
+  static const int CHAN_RING = 32;
+  ChanMsg _ring[CHAN_RING];
+  int _ring_head = 0, _ring_count = 0;
+  mesh::GroupChannel _public;
+
+  // heard adverts with a name: 32-entry cache served through GET_CONTACTS
+  static const int NAME_CACHE = 32;
+  hl::Contact _names[NAME_CACHE];
+  bool _name_used[NAME_CACHE] = { false };
+  uint32_t _last_lastmod = 0;
+  // GET_CONTACTS reply in progress (frames are paced by the transport's write queue)
+  int _iter_tr = -1;
+  int _iter_idx = 0;
+  uint32_t _iter_since = 0;
+
+  // TRACE (path ping): the last trace sent, from the CLI or a host
+  hl::TraceResult _trace;
+  uint32_t _trace_sent_ms = 0;
+  uint32_t _trace_sent_s = 0;   // RTC seconds, for the age shown to the user
+  bool sendTrace(const uint8_t* path, uint8_t path_len, uint8_t flags, uint32_t tag, uint32_t auth);
+  void traceLine(char* out, size_t cap);
+  void cmdSendTrace(int t, const uint8_t* f, size_t len);
+  void traceLoop();
+
+  // ---- transport helpers ----
+  void send(int t, size_t n) { if (_tr[t] && n) _tr[t]->writeFrame(_out, n); }
+  void pushAll(size_t n) {
+    for (int t = 0; t < NUM_TR; t++) if (_tr[t] && _tr[t]->isConnected()) send(t, n);
+  }
+  bool hostActive() const {
+    for (int t = 0; t < NUM_TR; t++) if (_tr[t] && _tr[t]->isConnected()) return true;
+    return false;
+  }
+  void err(int t, uint8_t code) { send(t, hl::buildErr(_out, code)); }
+  void ok(int t) { send(t, hl::buildOk(_out)); }
+
+  // ---- room posts ----
+  bool isHostPost(uint32_t ts) const { return spark::HostPosts::has(ts); }
+  const PostInfo* newestPost() const {
+    const PostInfo* best = nullptr;
+    for (int i = 0; i < MAX_UNSYNCED_POSTS; i++) {
+      const PostInfo* p = &_m->posts[i];
+      if (p->post_timestamp && (!best || p->post_timestamp > best->post_timestamp)) best = p;
+    }
+    return best;
+  }
+  // Oldest stored post newer than the cursor that did not originate from the host.
+  // `advance` moves the cursor past everything it looks at.
+  const PostInfo* nextPost(bool advance) {
+    uint32_t cursor = _post_cursor;
+    for (;;) {
+      const PostInfo* best = nullptr;
+      for (int i = 0; i < MAX_UNSYNCED_POSTS; i++) {
+        const PostInfo* p = &_m->posts[i];
+        if (p->post_timestamp > cursor && (!best || p->post_timestamp < best->post_timestamp)) best = p;
+      }
+      if (!best) break;
+      cursor = best->post_timestamp;
+      if (isHostPost(best->post_timestamp)) continue;
+      if (advance) _post_cursor = cursor;
+      return best;
+    }
+    if (advance) _post_cursor = cursor;
+    return nullptr;
+  }
+  bool anythingWaiting() { return nextPost(false) != nullptr; }
+
+  // ---- command handlers ----
+  void handleFrame(int t, const uint8_t* f, size_t len);
+  void cmdAppStart(int t, size_t len);
+  void cmdDeviceQuery(int t);
+  void cmdSetTime(int t, const uint8_t* f, size_t len);
+  void cmdStats(int t, const uint8_t* f, size_t len);
+  void cmdSendTxt(int t, const uint8_t* f, size_t len);
+  void cmdCli(int t, const uint8_t* f, size_t len);
+  void cmdSync(int t);
+  void cmdGetChannel(int t, const uint8_t* f, size_t len);
+  void cmdSendChannel(int t, const uint8_t* f, size_t len);
+  void cmdGetContacts(int t, const uint8_t* f, size_t len);
+  void stepContacts();
+  void pushChannelMsg(const ChanMsg& m);
+};
+
+static HostLink g_hostlink;
+
+// ---------------------------------------------------------------------------
+
+void HostLink::begin(MyMesh& mesh) {
+  _m = &mesh;
+  _tr[TR_USB] = &_usb;
+  spark::initPublicChannel(_public, [](uint8_t* h, size_t hl_, const uint8_t* m, int n) { mesh::Utils::sha256(h, hl_, m, n); });   // g_hostlink is static: hash/secret start zeroed
+  loadPrefs();   // BLE itself is started later, from loop() (see startBle)
+}
+
+// BLE is started a while after boot, not in setup(): starting the SoftDevice while the host
+// is still enumerating the USB device (right after a reset) can leave USB serial dead, and the
+// USB text CLI is the recovery path. The delay is also the window in which `set ble off`
+// over USB prevents BLE from starting at all.
+void HostLink::startBle() {
+#ifdef HOSTLINK_BLE
+  _ble.begin("MeshCore-", _m->getNodePrefs()->node_name, _ble_pin);
+  _ble.enable();
+  _tr[TR_BLE] = &_ble;
+  _ble_running = true;
+#endif
+}
+
+void HostLink::loop() {
+  if (!_m) return;
+#ifdef HOSTLINK_BLE
+  // Never a default PIN: without an owner-set PIN the BLE stack is never started.
+  if (!_ble_running && _ble_pin != 0 && _ble_enabled && millis() >= BLE_START_DELAY_MS) startBle();
+#endif
+  for (int t = 0; t < NUM_TR; t++) {
+    if (!_tr[t]) continue;
+    _tr[t]->loop();
+    size_t n = _tr[t]->checkRecvFrame(_in);   // BLE also drains its send queue here
+    if (n > 0) handleFrame(t, _in, n);
+  }
+  stepContacts();
+  traceLoop();
+}
+
+void HostLink::postStored() {
+  if (!_m || _suppress_push) return;
+  if (hostActive()) pushAll(hl::buildMsgWaiting(_out));
+}
+
+void HostLink::handleFrame(int t, const uint8_t* f, size_t len) {
+  switch (f[0]) {
+    case CMD_APP_START:        cmdAppStart(t, len); break;
+    case CMD_DEVICE_QUERY:     if (len < 2) err(t, ERR_CODE_ILLEGAL_ARG); else cmdDeviceQuery(t); break;
+    case CMD_GET_DEVICE_TIME:  send(t, hl::buildCurrTime(_out, _m->getRTCClock()->getCurrentTime())); break;
+    case CMD_SET_DEVICE_TIME:  cmdSetTime(t, f, len); break;
+    case CMD_GET_BATT_AND_STORAGE: {
+      uint32_t used = 0, total = 0;
+#ifdef ROOM_PERSIST_POSTS
+      PostPersist::usage(used, total);
+      if (!PostPersist::isOn()) total = 0;
+#endif
+      send(t, hl::buildBattStorage(_out, board.getBattMilliVolts(), used, total));
+      break;
+    }
+    case CMD_GET_STATS:        cmdStats(t, f, len); break;
+    case CMD_SEND_TXT_MSG:     cmdSendTxt(t, f, len); break;
+    case CMD_RUN_CLI_COMMAND:  cmdCli(t, f, len); break;
+    case CMD_SYNC_NEXT_MESSAGE: cmdSync(t); break;
+    case CMD_GET_CHANNEL:      cmdGetChannel(t, f, len); break;
+    case CMD_SET_CHANNEL:      err(t, ERR_CODE_UNSUPPORTED_CMD); break;   // fixed Public channel in v1
+    case CMD_SEND_CHANNEL_TXT_MSG: cmdSendChannel(t, f, len); break;
+    case CMD_GET_CONTACTS:     cmdGetContacts(t, f, len); break;
+    case CMD_SEND_TRACE_PATH:  cmdSendTrace(t, f, len); break;
+    default:                   err(t, ERR_CODE_UNSUPPORTED_CMD); break;
+  }
+}
+
+void HostLink::cmdAppStart(int t, size_t len) {
+  if (len < 8) { err(t, ERR_CODE_ILLEGAL_ARG); return; }
+  _post_cursor = 0;   // replay every stored post
+  NodePrefs* p = _m->getNodePrefs();
+  hl::SelfInfo s;
+  memset(&s, 0, sizeof(s));
+  s.adv_type = ADV_TYPE_ROOM;
+  s.tx_power = (uint8_t)p->tx_power_dbm;
+  s.max_tx_power = LORA_TX_POWER;
+  memcpy(s.pubkey, _m->self_id.pub_key, hl::PUBKEY_SIZE);
+  s.lat = (int32_t)(p->node_lat * 1000000.0);
+  s.lon = (int32_t)(p->node_lon * 1000000.0);
+  s.multi_acks = p->multi_acks;
+  s.advert_loc_policy = p->advert_loc_policy;
+  s.freq_khz = (uint32_t)(p->freq * 1000.0f + 0.5f);
+  s.bw_hz = (uint32_t)(p->bw * 1000.0f + 0.5f);
+  s.sf = p->sf;
+  s.cr = p->cr;
+  s.name = p->node_name;
+  send(t, hl::buildSelfInfo(_out, s));
+  _iter_tr = -1;   // abandon any GET_CONTACTS reply from a previous session
+  if (anythingWaiting() || _ring_count > 0) send(t, hl::buildMsgWaiting(_out));
+}
+
+void HostLink::cmdDeviceQuery(int t) {
+  NodePrefs* p = _m->getNodePrefs();
+  hl::DeviceInfo d;
+  d.build_date = FIRMWARE_BUILD_DATE;
+  d.board_model = board.getManufacturerName();
+  d.version = FIRMWARE_VERSION;
+  d.repeat_enabled = p->disable_fwd ? 0 : 1;
+  d.path_hash_mode = p->path_hash_mode;
+  send(t, hl::buildDeviceInfo(_out, d));
+}
+
+void HostLink::cmdSetTime(int t, const uint8_t* f, size_t len) {
+  if (len < 5) { err(t, ERR_CODE_ILLEGAL_ARG); return; }
+  uint32_t secs = (uint32_t)f[1] | ((uint32_t)f[2] << 8) | ((uint32_t)f[3] << 16) | ((uint32_t)f[4] << 24);
+  if (secs < _m->getRTCClock()->getCurrentTime()) { err(t, ERR_CODE_ILLEGAL_ARG); return; }
+  _m->getRTCClock()->setCurrentTime(secs);
+  ok(t);
+}
+
+void HostLink::cmdStats(int t, const uint8_t* f, size_t len) {
+  if (len < 2) { err(t, ERR_CODE_ILLEGAL_ARG); return; }
+  switch (f[1]) {
+    case STATS_TYPE_CORE:
+      send(t, hl::buildStatsCore(_out, board.getBattMilliVolts(), _m->_ms->getMillis() / 1000, _m->_err_flags,
+                                 (uint8_t)_m->_mgr->getOutboundTotal()));
+      break;
+    case STATS_TYPE_RADIO:
+      send(t, hl::buildStatsRadio(_out, (int16_t)_m->_radio->getNoiseFloor(), (int8_t)radio_driver.getLastRSSI(),
+                                  (int8_t)(radio_driver.getLastSNR() * 4), _m->getTotalAirTime() / 1000,
+                                  _m->getReceiveAirTime() / 1000));
+      break;
+    case STATS_TYPE_PACKETS:
+      send(t, hl::buildStatsPackets(_out, radio_driver.getPacketsRecv(), radio_driver.getPacketsSent(),
+                                    _m->getNumSentFlood(), _m->getNumSentDirect(), _m->getNumRecvFlood(),
+                                    _m->getNumRecvDirect(), radio_driver.getPacketsRecvErrors()));
+      break;
+    default:
+      err(t, ERR_CODE_ILLEGAL_ARG);
+  }
+}
+
+// SEND_TXT_MSG to the node's own key prefix == "post this to the room as the room itself".
+void HostLink::cmdSendTxt(int t, const uint8_t* f, size_t len) {
+  hl::TxtSendCmd c;
+  if (!hl::parseTxtSend(f, len, c)) { err(t, ERR_CODE_ILLEGAL_ARG); return; }
+  if (memcmp(c.dest6, _m->self_id.pub_key, 6) != 0) { err(t, ERR_CODE_NOT_FOUND); return; }
+  if (c.txt_type != 0) { err(t, ERR_CODE_UNSUPPORTED_CMD); return; }
+
+  size_t tl = 0;
+  while (tl < c.text_len && c.text[tl]) tl++;
+  tl = hl::truncUtf8(c.text, tl, hl::MAX_POST_TEXT);
+  if (tl == 0) { err(t, ERR_CODE_ILLEGAL_ARG); return; }
+  memcpy(_cmd, c.text, tl);
+  _cmd[tl] = 0;
+
+  _suppress_push = true;
+  _m->addSystemPost(_cmd);
+  _suppress_push = false;
+  // never echo this post back to the host (live or in the APP_START replay; the mark is
+  // persisted with the post)
+  const PostInfo* p = newestPost();
+  if (p) {
+    spark::HostPosts::mark(p->post_timestamp);
+  }
+  send(t, hl::buildSent(_out));
+}
+
+void HostLink::cmdCli(int t, const uint8_t* f, size_t len) {
+  if (len < 2) { err(t, ERR_CODE_ILLEGAL_ARG); return; }
+  size_t n = len - 1;
+  if (n > hl::MAX_CHAN_TEXT) n = hl::MAX_CHAN_TEXT;
+  memcpy(_cmd, &f[1], n);
+  _cmd[n] = 0;
+  _reply[0] = 0;
+  // Non-zero timestamp: the node treats this like a remote admin, so upstream's
+  // serial-only commands (erase, get prv.key, set freq, get acl, log) are refused.
+  uint32_t now = _m->getRTCClock()->getCurrentTime();
+  _m->handleCommand(now ? now : 1, _cmd, _reply);
+  send(t, hl::buildCliReply(_out, _reply));
+}
+
+void HostLink::cmdSync(int t) {
+  const PostInfo* p = nextPost(true);
+  if (p) {
+    send(t, hl::buildRoomPost(_out, _m->self_id.pub_key, p->post_timestamp, p->author.pub_key, p->text,
+                              strlen(p->text)));
+    return;
+  }
+  if (_ring_count > 0) {
+    const ChanMsg& c = _ring[(_ring_head + CHAN_RING - _ring_count) % CHAN_RING];   // oldest
+    send(t, hl::buildChannelMsg(_out, c.snr_x4, 0, c.path_len, c.timestamp, c.text, c.text_len));
+    _ring_count--;
+    return;
+  }
+  send(t, hl::buildNoMore(_out));
+}
+
+// ---- Public channel ----
+
+int HostLink::searchChannels(const uint8_t* hash, mesh::GroupChannel channels[], int max_matches) {
+  if (max_matches < 1 || !spark::channelHashMatches(_public, hash)) return 0;
+  channels[0] = _public;
+  return 1;
+}
+
+void HostLink::groupRecv(mesh::Packet* packet, uint8_t type, uint8_t* data, size_t len) {
+  if (type != PAYLOAD_TYPE_GRP_TXT || len < 6) return;
+  if ((data[4] >> 2) != 0) return;   // plain text only
+  ChanMsg c;
+  c.snr_x4 = (int8_t)(packet->getSNR() * 4);
+  c.path_len = packet->isRouteFlood() ? packet->path_len : 0xFF;
+  memcpy(&c.timestamp, data, 4);
+  size_t tl = 0;
+  while (5 + tl < len && data[5 + tl]) tl++;
+  tl = hl::truncUtf8((const char*)&data[5], tl, sizeof(c.text));
+  if (tl == 0) return;
+  memcpy(c.text, &data[5], tl);
+  c.text_len = (uint8_t)tl;
+  pushChannelMsg(c);
+}
+
+void HostLink::pushChannelMsg(const ChanMsg& c) {
+  _ring[_ring_head] = c;   // when full this overwrites the oldest entry
+  _ring_head = (_ring_head + 1) % CHAN_RING;
+  if (_ring_count < CHAN_RING) _ring_count++;
+  if (hostActive()) pushAll(hl::buildMsgWaiting(_out));
+}
+
+void HostLink::cmdGetChannel(int t, const uint8_t* f, size_t len) {
+  if (len < 2) { err(t, ERR_CODE_ILLEGAL_ARG); return; }
+  if (f[1] != 0) { err(t, ERR_CODE_NOT_FOUND); return; }
+  send(t, hl::buildChannelInfo(_out, 0, "Public", PUBLIC_CHANNEL_SECRET));
+}
+
+void HostLink::cmdSendChannel(int t, const uint8_t* f, size_t len) {
+  hl::ChannelSendCmd c;
+  if (!hl::parseChannelSend(f, len, c)) { err(t, ERR_CODE_ILLEGAL_ARG); return; }
+  if (c.txt_type != 0) { err(t, ERR_CODE_UNSUPPORTED_CMD); return; }
+  if (c.chan_idx != 0) { err(t, ERR_CODE_NOT_FOUND); return; }
+
+  // payload: u32 timestamp, u8 txt_type (0), "<node name>: <text>" cut to 160 bytes
+  uint8_t data[5 + hl::MAX_CHAN_TEXT + 1];
+  uint32_t ts = c.timestamp ? c.timestamp : _m->getRTCClock()->getCurrentTime();
+  memcpy(data, &ts, 4);
+  data[4] = 0;
+  size_t n = hl::composeChannelText((char*)&data[5], _m->getNodePrefs()->node_name, c.text, c.text_len);
+  mesh::Packet* pkt = _m->createGroupDatagram(PAYLOAD_TYPE_GRP_TXT, _public, data, 5 + n);
+  if (!pkt) { err(t, ERR_CODE_TABLE_FULL); return; }
+  // sendFlood marks the packet as seen, so a repeater's copy is not delivered back to us
+  _m->sendFloodScoped(_m->default_scope, pkt, 0, _m->getNodePrefs()->path_hash_mode + 1);
+  ok(t);
+}
+
+// ---- TRACE (path ping) ----
+// A direct-routed TRACE packet with the hop hashes as its path: every listed repeater appends
+// the SNR it heard the previous sender with and forwards it; when the path is used up the packet
+// reaches Mesh::onTraceRecv here. Same wire behaviour as the companion firmware.
+
+bool HostLink::sendTrace(const uint8_t* path, uint8_t path_len, uint8_t flags, uint32_t tag, uint32_t auth) {
+  mesh::Packet* pkt = _m->createTrace(tag, auth, flags);
+  if (!pkt) return false;
+  _m->sendDirect(pkt, path, path_len);
+  _trace = hl::TraceResult();
+  _trace.state = hl::TraceResult::PENDING;
+  _trace.tag = tag;
+  _trace.flags = flags;
+  _trace_sent_ms = millis();
+  _trace_sent_s = _m->getRTCClock()->getCurrentTime();
+  return true;
+}
+
+void HostLink::cmdSendTrace(int t, const uint8_t* f, size_t len) {
+  hl::TraceSendCmd c;
+  if (!hl::parseTraceSend(f, len, c, MAX_PATH_SIZE)) { err(t, ERR_CODE_ILLEGAL_ARG); return; }
+  if (!sendTrace(c.path, c.path_len, c.flags, c.tag, c.auth)) { err(t, ERR_CODE_TABLE_FULL); return; }
+  send(t, hl::buildTraceSent(_out, c.tag, hl::TRACE_TIMEOUT_MS));
+}
+
+void HostLink::traceLine(char* out, size_t cap) {
+  uint32_t age = (_trace.state == hl::TraceResult::NONE) ? 0 : (uint32_t)(millis() - _trace_sent_ms) / 1000;
+  hl::formatTraceResult(out, cap, _trace, age);
+}
+
+// Mesh::onTraceRecv: same push as upstream companion for every trace that ends here; the
+// CLI result is only kept when the tag is the one we sent.
+void HostLink::traceRecv(mesh::Packet* packet, uint32_t tag, uint32_t auth, uint8_t flags, const uint8_t* snrs,
+                         const uint8_t* hashes, uint8_t path_len) {
+  if (!_m) return;
+  int8_t final_snr = (int8_t)(packet->getSNR() * 4);
+  if (hostActive()) {
+    size_t n = hl::buildTraceData(_out, tag, auth, flags, hashes, (const int8_t*)snrs, path_len, final_snr);
+    if (n) pushAll(n);
+  }
+  uint8_t sz = flags & 0x03;
+  size_t hops = path_len >> sz;
+  if (_trace.state != hl::TraceResult::PENDING || tag != _trace.tag) return;
+  if (path_len > hl::MAX_TRACE_BYTES || hops > hl::MAX_TRACE_HOPS) return;
+  _trace.state = hl::TraceResult::DONE;
+  _trace.flags = flags;
+  _trace.n_hops = (uint8_t)hops;
+  memcpy(_trace.hashes, hashes, path_len);
+  memcpy(_trace.snr_x4, snrs, hops);
+  _trace.final_snr_x4 = final_snr;
+  _trace.final_rssi = (int16_t)radio_driver.getLastRSSI();
+  char line[200];
+  traceLine(line, sizeof(line));
+  Serial.println(line);
+}
+
+void HostLink::traceLoop() {
+  if (_trace.state == hl::TraceResult::PENDING && (uint32_t)(millis() - _trace_sent_ms) >= hl::TRACE_TIMEOUT_MS) {
+    _trace.state = hl::TraceResult::TIMEOUT;
+    char line[80];
+    traceLine(line, sizeof(line));
+    Serial.println(line);
+  }
+}
+
+// ---- name cache ----
+
+void HostLink::advertRecv(const mesh::Identity& id, const uint8_t* app_data, size_t app_data_len) {
+  if (!_m || id.matches(_m->self_id)) return;
+  AdvertDataParser parser(app_data, (uint8_t)app_data_len);
+  if (!parser.isValid() || !parser.hasName()) return;
+  noteName(id.pub_key, parser.getName(), parser.getType(), parser.hasLatLon(),
+           parser.hasLatLon() ? parser.getIntLat() : 0, parser.hasLatLon() ? parser.getIntLon() : 0);
+}
+
+// Name cache entry from an advert, or from the member directory (a kid's chosen name), so
+// `get names`, GET_CONTACTS and the NEW_ADVERT push all carry it.
+void HostLink::noteName(const uint8_t* pubkey, const char* name, uint8_t adv_type, bool has_loc, int32_t lat,
+                        int32_t lon) {
+  if (!_m || !name || !name[0] || memcmp(pubkey, _m->self_id.pub_key, hl::PUBKEY_SIZE) == 0) return;
+  int slot = -1, oldest = 0;
+  for (int i = 0; i < NAME_CACHE; i++) {
+    if (!_name_used[i]) { if (slot < 0) slot = i; continue; }
+    if (memcmp(_names[i].pubkey, pubkey, hl::PUBKEY_SIZE) == 0) { slot = i; break; }
+    if (_names[i].lastmod < _names[oldest].lastmod) oldest = i;
+  }
+  if (slot < 0) slot = oldest;   // table full: replace the oldest
+  hl::Contact& c = _names[slot];
+  memset(&c, 0, sizeof(c));
+  memcpy(c.pubkey, pubkey, hl::PUBKEY_SIZE);
+  c.adv_type = adv_type;
+  strncpy(c.name, name, sizeof(c.name) - 1);
+  c.last_advert_ts = _m->getRTCClock()->getCurrentTime();
+  if (has_loc) { c.lat = lat; c.lon = lon; }
+  uint32_t now = c.last_advert_ts;
+  _last_lastmod = c.lastmod = (now > _last_lastmod) ? now : _last_lastmod + 1;
+  _name_used[slot] = true;
+
+  // push only when the transport can take it right now
+  if (hostActive()) {
+    size_t n = hl::buildContact(_out, PUSH_CODE_NEW_ADVERT, c);
+    for (int t = 0; t < NUM_TR; t++) {
+      if (_tr[t] && _tr[t]->isConnected() && !_tr[t]->isWriteBusy()) send(t, n);
+    }
+  }
+}
+
+void HostLink::cmdGetContacts(int t, const uint8_t* f, size_t len) {
+  uint32_t since = 0;
+  if (len >= 5) since = (uint32_t)f[1] | ((uint32_t)f[2] << 8) | ((uint32_t)f[3] << 16) | ((uint32_t)f[4] << 24);
+  uint32_t count = 0;
+  for (int i = 0; i < NAME_CACHE; i++) if (_name_used[i] && _names[i].lastmod > since) count++;
+  send(t, hl::buildContactsStart(_out, count));
+  _iter_tr = t;
+  _iter_idx = 0;
+  _iter_since = since;
+}
+
+// Emit the pending CONTACT frames, at most a few per loop and only while the transport
+// has room, then END_OF_CONTACTS.
+void HostLink::stepContacts() {
+  if (_iter_tr < 0) return;
+  BaseSerialInterface* tr = _tr[_iter_tr];
+  if (!tr || !tr->isConnected()) { _iter_tr = -1; return; }
+  for (int budget = 4; budget > 0; budget--) {
+    if (tr->isWriteBusy()) return;
+    while (_iter_idx < NAME_CACHE && !(_name_used[_iter_idx] && _names[_iter_idx].lastmod > _iter_since)) _iter_idx++;
+    if (_iter_idx < NAME_CACHE) {
+      send(_iter_tr, hl::buildContact(_out, RESP_CODE_CONTACT, _names[_iter_idx]));
+      _iter_idx++;
+      continue;
+    }
+    send(_iter_tr, hl::buildEndOfContacts(_out, _last_lastmod));
+    _iter_tr = -1;
+    return;
+  }
+}
+
+// ---- spark prefs and CLI ----
+
+void HostLink::loadPrefs() {
+  _ble_pin = 0;
+  _ble_enabled = true;
+  File f = _m->_fs->open(SPARK_PREFS_FILE, FILE_O_READ);
+  if (f) {
+    uint8_t b[10];
+    if (f.read(b, sizeof(b)) == (int)sizeof(b)) {
+      uint32_t magic = (uint32_t)b[0] | ((uint32_t)b[1] << 8) | ((uint32_t)b[2] << 16) | ((uint32_t)b[3] << 24);
+      if (magic == SPARK_PREFS_MAGIC && b[4] == 1) {
+        _ble_pin = (uint32_t)b[5] | ((uint32_t)b[6] << 8) | ((uint32_t)b[7] << 16) | ((uint32_t)b[8] << 24);
+        _ble_enabled = b[9] != 0;
+      }
+    }
+    f.close();
+  }
+#ifdef SPARK_BLE_PIN
+  // PIN from the build (.env SPARK_BLE_PIN), used only while none was set over USB.
+  if (_ble_pin == 0 && SPARK_BLE_PIN >= 100000 && SPARK_BLE_PIN <= 999999) _ble_pin = SPARK_BLE_PIN;
+#endif
+}
+
+bool HostLink::savePrefs() {
+  uint8_t b[10] = { (uint8_t)SPARK_PREFS_MAGIC, (uint8_t)(SPARK_PREFS_MAGIC >> 8), (uint8_t)(SPARK_PREFS_MAGIC >> 16),
+                    (uint8_t)(SPARK_PREFS_MAGIC >> 24), 1,
+                    (uint8_t)_ble_pin, (uint8_t)(_ble_pin >> 8), (uint8_t)(_ble_pin >> 16), (uint8_t)(_ble_pin >> 24),
+                    (uint8_t)(_ble_enabled ? 1 : 0) };
+  _m->_fs->remove(SPARK_PREFS_FILE);
+  File f = _m->_fs->open(SPARK_PREFS_FILE, FILE_O_WRITE);
+  if (!f) return false;
+  bool ok = f.write(b, sizeof(b)) == sizeof(b);
+  f.close();
+  return ok;
+}
+
+// Spark CLI commands. sender_timestamp == 0 means the USB text CLI; LoRa admin and
+// HostLink both pass a non-zero timestamp.
+bool HostLink::command(uint32_t ts, const char* cmd, char* reply) {
+  if (!_m) return false;
+  if (strncmp(cmd, "set ble.pin ", 12) == 0) {
+    if (ts != 0) { strcpy(reply, "ERR - USB serial only"); return true; }
+    const char* d = cmd + 12;
+    size_t n = strlen(d);
+    bool digits = n == 6;
+    for (size_t i = 0; i < n && digits; i++) digits = d[i] >= '0' && d[i] <= '9';
+    if (!digits || d[0] == '0') { strcpy(reply, "ERR - need 6 digits, not starting with 0"); return true; }
+    _ble_pin = (uint32_t)atol(d);
+    strcpy(reply, savePrefs() ? "OK - reboot to apply" : "ERR - save failed");
+  } else if (strcmp(cmd, "get ble.pin") == 0) {
+    strcpy(reply, _ble_pin ? "> set" : "> unset");   // the value is never shown
+  } else if (strcmp(cmd, "set ble on") == 0 || strcmp(cmd, "set ble off") == 0) {
+    _ble_enabled = cmd[9] == 'n';
+    if (!savePrefs()) { strcpy(reply, "ERR - save failed"); return true; }
+#ifdef HOSTLINK_BLE
+    if (_ble_running) {   // kill switch: takes effect immediately
+      if (_ble_enabled) _ble.enable(); else _ble.disable();
+      strcpy(reply, "OK");
+      return true;
+    }
+#endif
+    strcpy(reply, _ble_pin ? "OK" : "OK - set ble.pin first (USB)");   // starts from loop() once the boot delay is over
+  } else if (strcmp(cmd, "get ble") == 0) {
+    sprintf(reply, "> %s, %s, connected %s, pin %s", _ble_enabled ? "on" : "off",
+            _ble_running ? "running" : (_ble_pin && _ble_enabled ? "starting" : "stopped"),
+            (_tr[TR_BLE] && _tr[TR_BLE]->isConnected()) ? "yes" : "no", _ble_pin ? "set" : "unset");
+  } else if (strcmp(cmd, "ble unpair") == 0) {
+#ifdef HOSTLINK_BLE
+    if (_ble_running) {
+      _ble.disconnect();
+      Bluefruit.Periph.clearBonds();
+      strcpy(reply, "OK - bonds cleared");
+      return true;
+    }
+#endif
+    strcpy(reply, "ERR - ble not running");
+  } else if (strcmp(cmd, "get spark") == 0) {
+    int posts = 0;
+    for (int i = 0; i < MAX_UNSYNCED_POSTS; i++) if (_m->posts[i].post_timestamp) posts++;
+    bool store = false;
+#ifdef ROOM_PERSIST_POSTS
+    store = PostPersist::isOn();
+#endif
+    sprintf(reply, "> %s store:%s posts:%d chan:%d host:%s%s", FIRMWARE_VERSION, store ? "on" : "off", posts,
+            _ring_count, (_tr[TR_USB] && _tr[TR_USB]->isConnected()) ? "usb" : "-",
+            (_tr[TR_BLE] && _tr[TR_BLE]->isConnected()) ? ",ble" : "");
+  } else if (strcmp(cmd, "trace") == 0) {
+    traceLine(reply, 150);
+  } else if (strncmp(cmd, "trace ", 6) == 0) {
+    uint8_t path[hl::MAX_TRACE_BYTES];
+    size_t n = 0;
+    uint8_t flags = 0;
+    if (!hl::parseTraceHops(cmd + 6, path, n, flags)) {
+      strcpy(reply, "ERR - usage: trace <hex>[,<hex>...] (hops of 1, 2 or 4 bytes, all the same size)");
+      return true;
+    }
+    uint32_t tag = 0;
+    while (tag == 0) _m->getRNG()->random((uint8_t*)&tag, 4);
+    if (!sendTrace(path, (uint8_t)n, flags, tag, 0)) { strcpy(reply, "ERR - packet pool empty"); return true; }
+    sprintf(reply, "OK - trace sent tag=%08X", (unsigned)tag);
+  } else if (strcmp(cmd, "get names") == 0 || strncmp(cmd, "get names ", 10) == 0) {
+    hl::formatNames(reply, 150, _names, _name_used, NAME_CACHE, cmd[9] ? atoi(cmd + 10) : 0);
+  } else if (strncmp(cmd, "start ota", 9) == 0 && _ble_running) {
+    // NRF52Board::startOTAUpdate would initialise Bluefruit a second time
+    strcpy(reply, "ERR - BLE is running, use the BLE DFU service");
+  } else {
+    return false;
+  }
+  return true;
+}
+
+// ---------------------------------------------------------------------------
+// MyMesh overrides (declared in MyMesh.h under WITH_HOSTLINK)
+
+int MyMesh::searchChannelsByHash(const uint8_t* hash, mesh::GroupChannel channels[], int max_matches) {
+  return g_hostlink.searchChannels(hash, channels, max_matches);
+}
+void MyMesh::onGroupDataRecv(mesh::Packet* packet, uint8_t type, const mesh::GroupChannel&, uint8_t* data, size_t len) {
+  g_hostlink.groupRecv(packet, type, data, len);
+}
+void MyMesh::onTraceRecv(mesh::Packet* packet, uint32_t tag, uint32_t auth_code, uint8_t flags, const uint8_t* path_snrs, const uint8_t* path_hashes, uint8_t path_len) {
+  g_hostlink.traceRecv(packet, tag, auth_code, flags, path_snrs, path_hashes, path_len);
+}
+void MyMesh::onAdvertRecv(mesh::Packet*, const mesh::Identity& id, uint32_t, const uint8_t* app_data, size_t app_data_len) {
+  g_hostlink.advertRecv(id, app_data, app_data_len);
+#ifdef ROOM_MEMBER_DIR
+  member_dir_advert(*this, id, app_data, app_data_len);
+#endif
+}
+
+// ---------------------------------------------------------------------------
+// free functions used by the hooks
+
+void hostlink_setup(MyMesh& mesh) { g_hostlink.begin(mesh); }
+bool hostlink_usb_byte(uint8_t c, bool line_empty) { return g_hostlink.usbByte(c, line_empty); }
+void hostlink_loop() { g_hostlink.loop(); }
+void hostlink_post_stored() { g_hostlink.postStored(); }
+bool hostlink_command(uint32_t ts, char* cmd, char* reply) { return g_hostlink.command(ts, cmd, reply); }
+void hostlink_note_name(const uint8_t* pubkey, const char* name) { g_hostlink.noteName(pubkey, name, 1, false, 0, 0); }
+
+#endif  // WITH_HOSTLINK
