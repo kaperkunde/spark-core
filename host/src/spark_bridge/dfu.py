@@ -108,7 +108,7 @@ class Package:
     image: bytes
     init: bytes
     init_info: InitPacket
-    version: str = ""  # "v1.18.0-SparkNode2", from the image's SPARK-BUILD tag
+    version: str = ""  # "v1.18.0-SparkNode1.1", from the image's SPARK-BUILD tag
     build_id: str = ""  # the node's `get build` must report this after the update
     warnings: list[str] = field(default_factory=list)
 
@@ -156,7 +156,7 @@ def check_package(path: str, image: bytes, init: bytes, *, max_size: int = APP_M
     if m:
         pkg.version, pkg.build_id = m.group(1).decode(), m.group(2).decode()
     else:
-        pkg.warnings.append("no SPARK-BUILD tag in the image: not a SparkNode2+ build, the result cannot be verified")
+        pkg.warnings.append("no SPARK-BUILD tag in the image: not a SparkNode1.1+ build, the result cannot be verified")
     return pkg
 
 

@@ -9,12 +9,12 @@
 
 ## Versions and tags
 
-Each part has its own counter: **SparkNode2**, **SparkBridge2**, **SparkKids1**, and so on. The
-MeshCore base stays visible: the node reports `v1.18.0-SparkNode2`, SparkKids shows
-`SparkKids1 (MeshCore v1.18.0)`, the bridge package is `spark-bridge` version `2`
-(`spark-bridge --version` prints `SparkBridge2`). SparkNode2 and SparkBridge2 add Bluetooth
+Each part has its own counter: **SparkNode1.1**, **SparkBridge1.1**, **SparkKids1**, and so on. The
+MeshCore base stays visible: the node reports `v1.18.0-SparkNode1.1`, SparkKids shows
+`SparkKids1 (MeshCore v1.18.0)`, the bridge package is `spark-bridge` version `1.1`
+(`spark-bridge --version` prints `SparkBridge1.1`). SparkNode1.1 and SparkBridge1.1 add Bluetooth
 updates (`dfu`, `spark-bridge update`); the node also reports a build id (`get build`). Git tags use the same names (`SparkNode1`,
-`SparkBridge1`, `SparkKids1`). Version strings live in `variants/spark_p1/platformio.ini`
+`SparkBridge1`, `SparkKids1`, then `SparkNode1.1`, `SparkBridge1.1`). Version strings live in `variants/spark_p1/platformio.ini`
 (`FIRMWARE_VERSION`), `variants/spark_tdeck/platformio.ini` (`KIDS_FW_VERSION`) and
 `host/pyproject.toml` + `host/src/spark_bridge/__init__.py`.
 

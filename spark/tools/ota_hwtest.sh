@@ -7,7 +7,7 @@
 # asks before running anything that writes to the node, and records pass / fail / skip with a
 # note in out/ota-test/hwtest-<date>.log. Steps, in this order:
 #   P0 build artifacts + unit tests (T0)     H1 read the installed bootloader (INFO_UF2.TXT)
-#   H2 install the OTA-safe bootloader (USB) H3 flash SparkNode2 over USB
+#   H2 install the OTA-safe bootloader (USB) H3 flash SparkNode1.1 over USB
 #   T1 passive scan, app                     T2 dfu over USB, bootloader at MAC+1, reset back
 #   T4 spark-bridge update x5 (same/new)     T5 abort before Start, finish with --in-bootloader
 #   T6 abort after Start: retry, power-cycle, USB recovery
@@ -84,17 +84,17 @@ stop_bridge() {
 # --------------------------------------------------------------------------------------------
 if step P0 "Build the artifacts and run the unit tests (T0)"; then
   say "Builds with the repository's .env (your real node settings)."
-  if ask "Build SparkNode2 (UF2 + DFU zip), a second build with a new build id, and the bootloader?"; then
+  if ask "Build SparkNode1.1 (UF2 + DFU zip), a second build with a new build id, and the bootloader?"; then
     (cd "$ROOT" && run "$PIO" run -e SparkNode_P1 -t create_uf2 -t dfu_zip) || exit 1
-    cp "$ROOT/.pio/build/SparkNode_P1/firmware.uf2" "$OUT/SparkNode2.uf2"
-    cp "$ROOT/.pio/build/SparkNode_P1/firmware-dfu.zip" "$OUT/SparkNode2.zip"
+    cp "$ROOT/.pio/build/SparkNode_P1/firmware.uf2" "$OUT/SparkNode1.1.uf2"
+    cp "$ROOT/.pio/build/SparkNode_P1/firmware-dfu.zip" "$OUT/SparkNode1.1.zip"
     (cd "$ROOT" && SPARK_BUILD_SALT="b-$(date +%s)" run "$PIO" run -e SparkNode_P1 -t create_uf2 -t dfu_zip) || exit 1
-    cp "$ROOT/.pio/build/SparkNode_P1/firmware.uf2" "$OUT/SparkNode2b.uf2"
-    cp "$ROOT/.pio/build/SparkNode_P1/firmware-dfu.zip" "$OUT/SparkNode2b.zip"
+    cp "$ROOT/.pio/build/SparkNode_P1/firmware.uf2" "$OUT/SparkNode1.1b.uf2"
+    cp "$ROOT/.pio/build/SparkNode_P1/firmware-dfu.zip" "$OUT/SparkNode1.1b.zip"
     run "$ROOT/spark/bootloader/build.sh" || exit 1
   fi
-  say "SparkNode2:  $(zip_build "$OUT/SparkNode2.zip")"
-  say "SparkNode2b: $(zip_build "$OUT/SparkNode2b.zip")"
+  say "SparkNode1.1:  $(zip_build "$OUT/SparkNode1.1.zip")"
+  say "SparkNode1.1b: $(zip_build "$OUT/SparkNode1.1b.zip")"
   [ -n "$ROLLBACK" ] && say "rollback UF2: $ROLLBACK" || say "No --rollback UF2 given: keep the current SparkNode1 UF2 at hand."
   if ask "Run the unit tests (native_spark, pytest)?"; then
     (cd "$ROOT" && run "$PIO" test -e native_spark) && (cd "$ROOT/host" && run .venv/bin/pytest -q)
@@ -134,14 +134,14 @@ if step H2 "Install the OTA-safe bootloader over USB (one time)"; then
   result
 fi
 
-if step H3 "Flash SparkNode2 over USB"; then
-  if ask "Copy $OUT/SparkNode2.uf2 to the node?"; then
+if step H3 "Flash SparkNode1.1 over USB"; then
+  if ask "Copy $OUT/SparkNode1.1.uf2 to the node?"; then
     d="$(wait_drive)" || { say "no XIAO-BOOT drive"; result; exit 1; }
-    run cp "$OUT/SparkNode2.uf2" "$d/"; sync
+    run cp "$OUT/SparkNode1.1.uf2" "$d/"; sync
     sleep 12
   fi
   cli "ver"; cli "get build"
-  say "expected: $(zip_build "$OUT/SparkNode2.zip")"
+  say "expected: $(zip_build "$OUT/SparkNode1.1.zip")"
   cli "get spark"
   say "Start the bridge again and check that it reconnects without re-pairing (log: 'connected to')."
   result
@@ -171,9 +171,9 @@ if step T4 "spark-bridge update, 5 runs (same build with --force, then a new bui
   pause "Bridge running?"
   for i in 1 2 3 4 5; do
     case "$i" in   # 1: the running build again (needs --force), then alternate new builds
-      1) z="$OUT/SparkNode2.zip"; f="--force" ;;
-      2|4) z="$OUT/SparkNode2b.zip"; f="" ;;
-      *) z="$OUT/SparkNode2.zip"; f="" ;;
+      1) z="$OUT/SparkNode1.1.zip"; f="--force" ;;
+      2|4) z="$OUT/SparkNode1.1b.zip"; f="" ;;
+      *) z="$OUT/SparkNode1.1.zip"; f="" ;;
     esac
     ask "Run $i: update to $(basename "$z") $f?" || continue
     run "$BRIDGE" update "$z" --yes $f; say "exit code $?"
@@ -188,7 +188,7 @@ if step T5 "Abort before Start: node waits in the bootloader; the tool finishes 
   cli "dfu"; sleep 60
   run "$BRIDGE" scan --seconds 15
   say "Expected: still advertising as bootloader after 60 s (no timeout)."
-  run "$BRIDGE" update "$OUT/SparkNode2b.zip" --in-bootloader --yes; say "exit code $?"
+  run "$BRIDGE" update "$OUT/SparkNode1.1b.zip" --in-bootloader --yes; say "exit code $?"
   cli "get build"
   say "Second part: dfu again, then just press reset: the old app must come back."
   cli "dfu"; sleep 5; pause "Press reset once"; sleep 8; cli "get build"
@@ -199,23 +199,23 @@ if step T6 "Abort after Start (node on the desk)"; then
   trap ':' INT   # Ctrl-C stops the updater, not this script
   say "a) Start an update and press Ctrl-C at about 30 %. The tool says the node has no app."
   pause "Ready?"
-  run "$BRIDGE" update "$OUT/SparkNode2.zip" --yes; say "exit code $?"
+  run "$BRIDGE" update "$OUT/SparkNode1.1.zip" --yes; say "exit code $?"
   run "$BRIDGE" scan --seconds 15
   say "   Expected (Spark bootloader): a bootloader row. Now retry:"
-  run "$BRIDGE" update "$OUT/SparkNode2.zip" --in-bootloader --yes; say "exit code $?"
+  run "$BRIDGE" update "$OUT/SparkNode1.1.zip" --in-bootloader --yes; say "exit code $?"
   cli "get build"
   say "b) Again Ctrl-C at about 30 %, then power-cycle the node (USB out, battery switch off/on)."
   pause "Ready?"
-  run "$BRIDGE" update "$OUT/SparkNode2b.zip" --yes
+  run "$BRIDGE" update "$OUT/SparkNode1.1b.zip" --yes
   pause "Power-cycle the node now"
   run "$BRIDGE" scan --seconds 20
   say "   Expected: bootloader advertising after power-on (no app -> BLE OTA, not USB)."
-  run "$BRIDGE" update "$OUT/SparkNode2b.zip" --in-bootloader --yes; say "exit code $?"
+  run "$BRIDGE" update "$OUT/SparkNode1.1b.zip" --in-bootloader --yes; say "exit code $?"
   cli "get build"
   say "c) Again Ctrl-C at about 30 %, then recover over USB: double-press must still give XIAO-BOOT."
   pause "Ready?"
-  run "$BRIDGE" update "$OUT/SparkNode2.zip" --yes
-  d="$(wait_drive)" && run cp "$OUT/SparkNode2.uf2" "$d/" && sync
+  run "$BRIDGE" update "$OUT/SparkNode1.1.zip" --yes
+  d="$(wait_drive)" && run cp "$OUT/SparkNode1.1.uf2" "$d/" && sync
   sleep 12; cli "get build"; cli "get spark"
   trap - INT
   result
@@ -223,7 +223,7 @@ fi
 
 if step T7 "Service Changed: bonded centrals re-discover by themselves"; then
   say "After the updates above the bridge (bonded Mac and/or Pi) must have reconnected without a"
-  say "Bluetooth toggle or re-pairing. Check its log for 'connected to ... (v1.18.0-SparkNode2)'."
+  say "Bluetooth toggle or re-pairing. Check its log for 'connected to ... (v1.18.0-SparkNode1.1)'."
   say "A full test needs an image with a different GATT layout (e.g. a build without the BLEDfu"
   say "service); flash it with spark-bridge update and check the bridge reconnects; then go back."
   result
@@ -231,13 +231,13 @@ fi
 
 if step T8 "Pi at its final location: 5 updates, RSSI logged"; then
   say "On the Pi: host/.venv/bin/spark-bridge scan (note the RSSI of the bootloader row),"
-  say "then 5 x host/.venv/bin/spark-bridge update <zip> --yes, alternating SparkNode2/SparkNode2b."
+  say "then 5 x host/.venv/bin/spark-bridge update <zip> --yes, alternating SparkNode1.1/SparkNode1.1b."
   result
 fi
 
 if step T9 "Phone fallback (nRF Connect or nRF DFU app)"; then
   cli "dfu"
-  say "On the phone: DFU, pick the AdaDFU device, choose $OUT/SparkNode2.zip (copy it to the phone)."
+  say "On the phone: DFU, pick the AdaDFU device, choose $OUT/SparkNode1.1.zip (copy it to the phone)."
   pause "Done on the phone?"
   sleep 10; cli "get build"
   result

@@ -2,7 +2,7 @@
 
 1. Check the package offline (dfu.load_package).
 2. Take the link lock; a running bridge daemon is asked to pause (SIGUSR1) and hands it over.
-3. Preflight over the normal link (BLE, or USB serial): firmware with `dfu` (SparkNode2+),
+3. Preflight over the normal link (BLE, or USB serial): firmware with `dfu` (SparkNode1.1+),
    running build, battery.
 4. Send `dfu`: the node answers with the bootloader's address (its own + 1), closes the link and
    resets into the bootloader, unbonded. The bridge's own BLE client is disconnected explicitly.
@@ -44,7 +44,7 @@ BUILD_RE = re.compile(r">\s*(v\S+)\s+(\S+)")
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(
         prog="spark-bridge update",
-        description="Update a SparkNode (SparkNode2 or later) over Bluetooth with a DFU package "
+        description="Update a SparkNode (SparkNode1.1 or later) over Bluetooth with a DFU package "
                     "(pio run -e SparkNode_P1 -t dfu_zip -> .pio/build/SparkNode_P1/firmware-dfu.zip).")
     ap.add_argument("zip", help="application DFU package (.zip)")
     ap.add_argument("--env", "-e", default=None, help="the .env file (default as for the bridge)")

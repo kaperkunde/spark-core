@@ -23,6 +23,8 @@
 #ifndef SPARK_BUILD_ID
   #define SPARK_BUILD_ID "unknown"
 #endif
+// DEVICE_INFO carries the version in a fixed 20 byte field (no NUL needed, see HostLinkCodec.cpp).
+static_assert(sizeof(FIRMWARE_VERSION) - 1 <= 20, "FIRMWARE_VERSION must fit the 20 byte DEVICE_INFO field");
 // The updater finds this string in a firmware image and compares it with `get build`.
 static const char SPARK_BUILD_TAG[] = "SPARK-BUILD " FIRMWARE_VERSION " " SPARK_BUILD_ID;
 

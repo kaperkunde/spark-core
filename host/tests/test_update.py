@@ -11,7 +11,7 @@ from spark_bridge.nodelink import NodeLink
 from test_dfu import FakeDevice, FakeTransport, image, init_packet, zip_bytes
 
 T0 = 1700000000
-BUILD = "v1.18.0-SparkNode2 ab12cd34-261122190000"
+BUILD = "v1.18.0-SparkNode1.1 ab12cd34-261122190000"
 
 
 async def wait_for(cond, timeout=5.0):
@@ -144,7 +144,7 @@ async def _fast_sleep(s, *a, **kw):
 
 
 async def test_update_flow(stub, tmp_path, fake_ble):
-    stub.cli_replies["get build"] = "> v1.18.0-SparkNode2 00000000-261101000000"
+    stub.cli_replies["get build"] = "> v1.18.0-SparkNode1.1 00000000-261101000000"
     stub.cli_replies["dfu"] = "OK - dfu C0:11:22:33:44:56 in 2 s, battery 4012 mV, x"
     zip_path, img = write_zip(tmp_path)
 
@@ -171,7 +171,7 @@ async def test_update_flow(stub, tmp_path, fake_ble):
 
 
 async def test_update_refuses_low_battery(stub, tmp_path, fake_ble):
-    stub.cli_replies["get build"] = "> v1.18.0-SparkNode2 00000000-261101000000"
+    stub.cli_replies["get build"] = "> v1.18.0-SparkNode1.1 00000000-261101000000"
     stub.battery_mv = 3500
     zip_path, _ = write_zip(tmp_path)
     assert await update.run(args_for(tmp_path, stub.port, zip_path)) == update.EXIT_FAILED
@@ -193,7 +193,7 @@ async def test_update_refuses_same_build(stub, tmp_path, fake_ble):
 
 
 async def test_update_reports_no_app_when_transfer_breaks(stub, tmp_path, fake_ble):
-    stub.cli_replies["get build"] = "> v1.18.0-SparkNode2 00000000-261101000000"
+    stub.cli_replies["get build"] = "> v1.18.0-SparkNode1.1 00000000-261101000000"
     stub.cli_replies["dfu"] = "OK - dfu C0:11:22:33:44:56 in 2 s, battery 4012 mV, x"
     fake_ble.dev.crc_fail = True
     zip_path, _ = write_zip(tmp_path)

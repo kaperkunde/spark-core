@@ -454,7 +454,7 @@ update_node_ble() {
     [ -x "$venv/bin/python" ] || run python3 -m venv "$venv"
     run "$venv/bin/pip" install --quiet -e "$ROOT/host"
   fi
-  info "The node must run SparkNode2 or later (SparkNode1 has no dfu command: use usb once)."
+  info "The node must run SparkNode1.1 or later (SparkNode1 has no dfu command: use usb once)."
   info "The bridge host must be paired with the node (BRIDGE_TRANSPORT=ble) or connected by USB."
   info "Battery at least 3.7 V; the transfer takes about 3 minutes; keep this computer awake."
   run "$venv/bin/spark-bridge" update --env "$ENV_FILE" "$NODE_ZIP" || \
@@ -524,7 +524,7 @@ if [ "$DO_NODE" = 1 ]; then
   info ""
   info "Install SparkNode:"
   info "  usb  copy the UF2 to the node's XIAO-BOOT drive (needs a USB cable; always works)"
-  info "  ble  update over Bluetooth with spark-bridge update (the node must already run SparkNode2"
+  info "  ble  update over Bluetooth with spark-bridge update (the node must already run SparkNode1.1"
   info "       or later; the bridge is paused while it runs)"
   info "  skip do it later"
   ask_match NODE_INSTALL "How" "usb" '^(usb|ble|skip)$' "Type usb, ble or skip."
@@ -650,7 +650,7 @@ install_bridge() {
 
 title "Done"
 info "Configuration: $ENV_FILE"
-[ "$DO_NODE" = 1 ] && info "SparkNode: on the node's USB console 'ver' shows v1.18.0-SparkNode2. Later updates: ./setup.sh (ble)."
+[ "$DO_NODE" = 1 ] && info "SparkNode: on the node's USB console 'ver' shows v1.18.0-SparkNode1.1. Later updates: ./setup.sh (ble)."
 [ "$DO_BRIDGE" = 1 ] && info "Spark Bridge: in Discord, run /spark status in a channel, then /spark receive both."
 [ "$DO_KIDS" = 1 ] && info "SparkKids: type a name on the T-Deck; it logs in to the room by itself."
 info "More: spark/README.md"

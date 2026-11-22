@@ -12,7 +12,7 @@ from spark_bridge.dfu import (DfuError, PackageError, Timeouts, check_package, c
                               load_package, mac_plus_one, parse_dfu_reply, transfer)
 
 FAST = Timeouts(response=0.5, start=0.5, receipt=0.2, final=0.5, validate=0.5)
-TAG = b"SPARK-BUILD v1.18.0-SparkNode2 ab12cd34-261122190000\x00"
+TAG = b"SPARK-BUILD v1.18.0-SparkNode1.1 ab12cd34-261122190000\x00"
 
 
 def image(size=4000):
@@ -47,8 +47,8 @@ def test_package_ok(tmp_path):
     p = tmp_path / "fw.zip"
     p.write_bytes(zip_bytes(img, init_packet(img)))
     pkg = load_package(str(p))
-    assert pkg.version == "v1.18.0-SparkNode2" and pkg.build_id == "ab12cd34-261122190000"
-    assert pkg.build == "v1.18.0-SparkNode2 ab12cd34-261122190000"
+    assert pkg.version == "v1.18.0-SparkNode1.1" and pkg.build_id == "ab12cd34-261122190000"
+    assert pkg.build == "v1.18.0-SparkNode1.1 ab12cd34-261122190000"
     assert not pkg.warnings
 
 

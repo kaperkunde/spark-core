@@ -5,8 +5,8 @@ It turns one solar roof node into a hub for your household and your neighbourhoo
 
 | Part | Version | What it is |
 |---|---|---|
-| **SparkNode** | SparkNode2 (`v1.18.0-SparkNode2`) | Firmware for a SenseCAP Solar Node P1 on your roof: a MeshCore **room** with store-and-forward for your own people, and a **relay** that strengthens the local mesh. |
-| **Spark Bridge** | SparkBridge2 (`spark-bridge 2`) | A small Python service on a Raspberry Pi or computer near the node. It links the node to **Discord**, one-way or two-way, with MeshCore Public and with the SparkNode room. |
+| **SparkNode** | SparkNode1.1 (`v1.18.0-SparkNode1.1`) | Firmware for a SenseCAP Solar Node P1 on your roof: a MeshCore **room** with store-and-forward for your own people, and a **relay** that strengthens the local mesh. |
+| **Spark Bridge** | SparkBridge1.1 (`spark-bridge 1.1`) | A small Python service on a Raspberry Pi or computer near the node. It links the node to **Discord**, one-way or two-way, with MeshCore Public and with the SparkNode room. |
 | **SparkKids** | SparkKids1 | Firmware for a **LilyGO T-Deck Plus**: a simple touch messenger with location sharing for kids, or anyone who doesn't like fancy tech. A "dumb phone" without a service plan. |
 
 ```
@@ -136,12 +136,12 @@ in a frame and never stored by the bridge.
 **Parents' commands** (USB, LoRa admin login, or `/spark cli`): `members`, `member del <prefix|name>`,
 `member name <prefix> <name>`, `where`, `where <name>`.
 
-**Version.** `ver` prints `v1.18.0-SparkNode2 (Build: <date>) <build id>`; `get build` prints the version and build id.
+**Version.** `ver` prints `v1.18.0-SparkNode1.1 (Build: <date>) <build id>`; `get build` prints the version and build id.
 
 ## Update over Bluetooth
 
-From SparkNode2 on, the roof node can be updated over Bluetooth from the bridge host. The
-first SparkNode2 goes on over USB (SparkNode1 has no `dfu` command).
+From SparkNode1.1 on, the roof node can be updated over Bluetooth from the bridge host. The
+first SparkNode1.1 goes on over USB (SparkNode1 has no `dfu` command).
 
 ```sh
 pio run -e SparkNode_P1 -t dfu_zip                       # .pio/build/SparkNode_P1/firmware-dfu.zip
@@ -161,10 +161,10 @@ bond hand-over data and resets into the bootloader's Bluetooth mode. Without a b
 bootloader advertises openly as `AdaDFU` at the node's address + 1 (last byte), so macOS and
 BlueZ see a new, unbonded device and no stale GATT cache gets in the way. Until the update is
 done, anyone in Bluetooth range could send it firmware; the window is the few minutes of the
-update. SparkNode2 also sends a Service Changed indication on the first secured connection after
+update. SparkNode1.1 also sends a Service Changed indication on the first secured connection after
 each boot, so bonded hosts re-read the GATT table after an update.
 
-**Node commands.** `dfu [force]`, `get build` (`> v1.18.0-SparkNode2 <git hash>[+]-<UTC time>`;
+**Node commands.** `dfu [force]`, `get build` (`> v1.18.0-SparkNode1.1 <git hash>[+]-<UTC time>`;
 `+` = built from uncommitted changes), `ver` (with the build id), `posts reset` (USB only:
 erase all stored room posts).
 
@@ -217,7 +217,7 @@ image on the desk before sending it to the roof.
 | `spark-bridge update` exit 1 (before Start) | The old app is intact. If the node is still in the bootloader (`spark-bridge scan`), press reset or run the update again. |
 | exit 4, Spark bootloader | The node waits for Bluetooth (also after a power cycle): `spark-bridge update --in-bootloader <zip>`, or nRF Connect / nRF DFU app on a phone with the zip. |
 | exit 4, stock bootloader | The bootloader session cannot take a new Start; a reset gives USB mode. Recovery is USB: double-press reset, copy the UF2. |
-| Node in USB mode (XIAO-BOOT) | Copy `firmware.uf2` (SparkNode2, or the previous release) to the drive. |
+| Node in USB mode (XIAO-BOOT) | Copy `firmware.uf2` (SparkNode1.1, or the previous release) to the drive. |
 | Nothing works (no drive, no advertising) | SWD: write the bootloader hex, then the app UF2 over USB. |
 
 Keep the UF2 of the running release and its DFU zip on the bridge host before every update.

@@ -1,4 +1,4 @@
-# Spark Bridge (SparkBridge2)
+# Spark Bridge (SparkBridge1.1)
 
 The Discord service of [Spark](../spark/README.md). It connects to a SparkNode (MeshCore room
 server with the HostLink firmware) over BLE, USB serial or TCP (stub node) and bridges the mesh
@@ -107,7 +107,7 @@ Behaviour details:
 
 ## Updating the node over Bluetooth (`spark-bridge update`)
 
-For a node that already runs SparkNode2 or later (SparkNode1 has no `dfu` command: update it
+For a node that already runs SparkNode1.1 or later (SparkNode1 has no `dfu` command: update it
 once over USB with `setup.sh`). Build the package, then run the updater on the bridge host:
 
 ```sh

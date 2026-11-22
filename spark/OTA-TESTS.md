@@ -8,10 +8,10 @@ copy a UF2 to XIAO-BOOT (keep the running release's UF2 at hand; `--rollback` re
 
 | # | Test | Pass |
 |---|---|---|
-| P0 / T0 | Build SparkNode2 (UF2 + DFU zip), a second build with another build id (`SPARK_BUILD_SALT`), the bootloader; `pio test -e native_spark`, bridge `pytest` | builds and all tests green |
+| P0 / T0 | Build SparkNode1.1 (UF2 + DFU zip), a second build with another build id (`SPARK_BUILD_SALT`), the bootloader; `pio test -e native_spark`, bridge `pytest` | builds and all tests green |
 | H1 | Double-press, read `INFO_UF2.TXT` | `Board-ID: nRF52840-SeeedXiao-v1`; note the bootloader version (stock 0.9.2 or a Seeed build?) |
 | H2 | Copy `update-xiao_nrf52840_ble_bootloader-0.11.0-spark1_nosd.uf2` to XIAO-BOOT; double-press again | INFO_UF2.TXT shows `0.11.0-spark1`, the app starts, identity and settings unchanged; `get spark` post count (posts may be lost: `posts reset` if damaged) |
-| H3 | Copy SparkNode2 `firmware.uf2` over USB | `ver` / `get build` show the expected build; the bridge reconnects without re-pairing |
+| H3 | Copy SparkNode1.1 `firmware.uf2` over USB | `ver` / `get build` show the expected build; the bridge reconnects without re-pairing |
 | T1 | Bridge stopped; `spark-bridge scan` | one `app` row (NUS) for the node; note the LEDs in app mode |
 | T2 | `dfu` on the USB console; `spark-bridge scan`; press reset | a `bootloader` row (AdaDFU) at the address from the reply (node + 1), connectable without a bond; after reset the same build, posts, identity |
 | T4 | `spark-bridge update` 5 times: the same build with `--force`, then alternating builds; bridge service running | 5 of 5 verified, no Bluetooth toggle, the bridge pauses and reconnects by itself, posts and ACL intact |
