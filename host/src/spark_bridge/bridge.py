@@ -110,7 +110,7 @@ NOTICE_PAIR_SECONDS = 600
 META_DOWN_PENDING = "down_notice_pending"
 META_LAST_PAIR = "last_notice_pair"
 DANGEROUS_CLI = ("password", "set password", "set guest.password", "set prv.key", "get prv.key",
-                 "erase", "start ota", "set ble.pin")
+                 "erase", "start ota", "set ble.pin", "dfu")
 
 
 @dataclass

@@ -71,7 +71,8 @@ class Handlers(Protocol):
 
 class NodeLink:
     def __init__(self, cfg: NodeConfig, handlers: Handlers | None = None, *, clock=time.time,
-                 sleep=asyncio.sleep, rng: random.Random | None = None, monotonic=time.monotonic):
+                 sleep=asyncio.sleep, rng: random.Random | None = None, monotonic=time.monotonic,
+                 lock=None, pause_grace: float = 5.0):
         self.cfg = cfg
         self.handlers = handlers
         self._clock = clock
@@ -92,6 +93,12 @@ class NodeLink:
         self._disconnected = asyncio.Event()
         self._waiting = asyncio.Event()
         self._stop = asyncio.Event()
+        # Link lock (lock.LinkLock): held while this process may use the link. request_pause()
+        # (SIGUSR1, from `spark-bridge update`) closes the link and hands the lock over.
+        self.lock = lock
+        self.pause_grace = pause_grace
+        self.paused = False
+        self._pause = asyncio.Event()
 
     # --- identity ------------------------------------------------------------
     @property
@@ -312,6 +319,37 @@ class NodeLink:
         self._disconnected.set()
         self._waiting.set()
 
+    def request_pause(self) -> None:
+        """Close the link and release the lock until it can be taken again (an update runs)."""
+        if self.lock is None:
+            log.warning("pause requested, but this process has no link lock")
+            return
+        log.info("pause requested: closing the link for another process")
+        self._pause.set()
+        self._disconnected.set()
+        self._waiting.set()
+
+    async def _hold_lock(self) -> None:
+        """Release the lock if a pause was requested, then wait until it is ours (again)."""
+        assert self.lock is not None
+        if self._pause.is_set():
+            self._pause.clear()
+            self.lock.release()
+            self.paused = True
+            self._down_since = None  # a pause is not an outage: the watchdog must not give up
+            log.info("paused: link closed, lock released")
+            await self._sleep(self.pause_grace)  # let the updater take the lock
+        if not self.lock.held and not self.lock.try_acquire():
+            self.paused = True
+            self._down_since = None
+            log.info("waiting for the link lock %s (spark-bridge update running?)", self.lock.path)
+            while not self._stop.is_set() and not self.lock.try_acquire():
+                await self._sleep(1.0)
+        if self.paused:
+            log.info("link lock taken again; reconnecting")
+        self.paused = False
+        self._down_since = self._monotonic()
+
     async def run(self) -> None:
         """Connect, serve, reconnect with backoff 2, 4, 8 .. 60 s plus jitter, forever.
 
@@ -347,6 +385,11 @@ class NodeLink:
         delay = self.cfg.backoff_start
         while not self._stop.is_set():
             was_up = False
+            if self.lock is not None and (self._pause.is_set() or not self.lock.held):
+                await self._hold_lock()
+                if self._stop.is_set():
+                    break
+                delay = self.cfg.backoff_start
             try:
                 await self.connect()
                 was_up = True
@@ -373,6 +416,8 @@ class NodeLink:
                     log.exception("on_link_down failed")
             if self._stop.is_set():
                 break
+            if self._pause.is_set():
+                continue  # no backoff, no give-up: _hold_lock() runs next
             limit = self.cfg.give_up_minutes * 60
             if limit > 0 and self._monotonic() - self._down_since >= limit:
                 log.error("no link for %.0f minutes; exiting so the supervisor restarts the process",
@@ -399,6 +444,9 @@ class NodeLink:
                 await asyncio.wait_for(waiter, max(0.0, next_poll - loop.time()))
             except asyncio.TimeoutError:
                 pass
+            if self._pause.is_set():
+                log.info("closing the link (pause)")
+                return
             if self._disconnected.is_set():
                 log.info("link lost")
                 return

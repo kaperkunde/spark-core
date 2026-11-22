@@ -269,7 +269,8 @@ async def test_cli_only_in_admin_channels(env):
 
 
 @pytest.mark.parametrize("cmd", ["password x", "set guest.password abc", "set prv.key 00", "erase",
-                                 "start ota", "set ble.pin 123456", "SET  BLE.PIN 1", "get prv.key"])
+                                 "start ota", "set ble.pin 123456", "SET  BLE.PIN 1", "get prv.key", "dfu",
+                                 "dfu force"])
 async def test_cli_denylist(env, cmd):
     b, node, _, _ = env
     cfg(b, ADMIN, admin=True)

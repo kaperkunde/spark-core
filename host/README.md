@@ -1,4 +1,4 @@
-# Spark Bridge (SparkBridge1)
+# Spark Bridge (SparkBridge2)
 
 The Discord service of [Spark](../spark/README.md). It connects to a SparkNode (MeshCore room
 server with the HostLink firmware) over BLE, USB serial or TCP (stub node) and bridges the mesh
@@ -104,6 +104,42 @@ Behaviour details:
 - Health: battery is sampled every `BRIDGE_HEALTH_SAMPLE_MINUTES`. The daily line (and `/spark health`) shows
   battery at 07:00 and 15:00 (nearest sample within 90 minutes, else `n/a`), the overnight change,
   uptime, noise floor and link availability over 24 h.
+
+## Updating the node over Bluetooth (`spark-bridge update`)
+
+For a node that already runs SparkNode2 or later (SparkNode1 has no `dfu` command: update it
+once over USB with `setup.sh`). Build the package, then run the updater on the bridge host:
+
+```sh
+pio run -e SparkNode_P1 -t dfu_zip            # at the repository root -> .pio/build/SparkNode_P1/firmware-dfu.zip
+host/.venv/bin/spark-bridge update .pio/build/SparkNode_P1/firmware-dfu.zip
+```
+
+What it does, in order (it stops at the first problem):
+
+1. Checks the package offline: application only, device type 0x52, SoftDevice S140 7.3.0,
+   CRC16, length, at most 708,608 bytes (the room post store starts above), a sane vector table,
+   and the `SPARK-BUILD <version> <id>` tag.
+2. Takes the link lock (`spark-bridge.lock` next to the state database). A running bridge
+   (systemd, launchd or a terminal) gets SIGUSR1, closes its link, hands the lock over and waits;
+   it reconnects by itself when the update is done. If the lock cannot be had, stop the service
+   (`sudo systemctl stop spark-bridge`, or `launchctl unload` the agent) and run it again.
+3. Over the normal link: reads `get build` and the battery. Refuses the same build and a battery
+   below 3700 mV (`--force` overrides both and sends `dfu force`). Asks for confirmation (`--yes`).
+4. Sends `dfu`. The node answers with its bootloader address (its own + 1) and resets into the
+   bootloader without a bond, so the bootloader is a separate device for macOS and BlueZ.
+5. Finds the bootloader by its live advertisement (DFU service), never by a cached name.
+6. Transfers with its own DFU code (`dfu.py`): every receipt is checked, a missing receipt is
+   checked against the bootloader's byte count, and Reset is never sent after the old app was
+   erased, except to the Spark bootloader, which restarts in OTA mode for a retry (3 attempts).
+7. Verifies: reconnects to the app and compares `get build` with the package.
+
+On Linux it then removes the temporary bootloader device from BlueZ (`bluetoothctl remove
+<MAC+1>`; never the bonded node). On macOS it toggles Bluetooth once with `blueutil` (if
+installed) when the updated app cannot be reached. Exit codes: 0 done and verified, 1 failed
+with the old app intact, 2 bad config or package, 4 the node has no app and waits in its
+bootloader: then `spark-bridge update --in-bootloader <zip>` retries (Spark bootloader), or see
+"Recovery" in [spark/README.md](../spark/README.md#update-over-bluetooth).
 
 ## Testing without hardware
 

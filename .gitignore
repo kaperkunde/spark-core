@@ -26,3 +26,4 @@ platformio.local.ini
 /host/.venv/
 /.spark-tools/
 /backups/
+/spark-bridge.lock
