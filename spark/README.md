@@ -1,3 +1,5 @@
+<p align="center"><img src="assets/spark-logo.png" alt="SpArk logo" width="420"></p>
+
 # SpArk guide
 
 SpArk is a set of three parts built on [MeshCore](https://github.com/meshcore-dev/MeshCore) v1.18.

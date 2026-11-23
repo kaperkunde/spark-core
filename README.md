@@ -1,3 +1,5 @@
+<p align="center"><img src="spark/assets/spark-logo.png" alt="SpArk logo" width="420"></p>
+
 # SpArk: a MeshCore hub for your household and neighbourhood
 
 **This fork adds SpArk to [MeshCore](https://github.com/meshcore-dev/MeshCore) v1.18.** SpArk turns
