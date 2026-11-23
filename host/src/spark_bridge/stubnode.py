@@ -1,7 +1,8 @@
 """Contract-faithful fake HostLink node (TCP, serial-style framing).
 
-Implements HOSTLINK CONTRACT v1 (plus the SparkNode1.2 sender name on channel sends, when the
-stub's version is SparkNode1.2 or later): the frame subset, the room-post replay cursor, the
+Implements HOSTLINK CONTRACT v1 (plus the SparkNode1.2 sender name on channel sends, and the
+SparkNode1.3 host features, LOG_RX_DATA, 0xC1 channel routes and JWT-only signing, when the
+stub's version is new enough): the frame subset, the room-post replay cursor, the
 32-entry channel ring, "no echo of host posts" and the golden vectors. Used by the tests
 and runnable by hand:
 
@@ -30,7 +31,17 @@ PUBLIC_SECRET = bytes.fromhex("8b3387e9c5cdea6ac9e5edbaa115cd72")
 OK, ERR, CONTACTS_START, CONTACT, END_OF_CONTACTS, SELF_INFO, SENT = 0, 1, 2, 3, 4, 5, 6
 CURR_TIME, NO_MORE, BATT, DEVICE_INFO, ROOM_POST, CHAN_MSG, CHANNEL_INFO = 9, 10, 12, 13, 16, 17, 18
 STATS, CLI_REPLY = 24, 29
-PUSH_MSG_WAITING, PUSH_NEW_ADVERT = 0x83, 0x8A
+SIGN_START, SIGNATURE = 19, 20
+SPARK_FEATURES, SPARK_CHAN_MSG = 0xC0, 0xC1
+PUSH_MSG_WAITING, PUSH_LOG_RX, PUSH_NEW_ADVERT = 0x83, 0x88, 0x8A
+_B64URL = set(b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_")
+
+
+def is_jwt_signing_input(data: bytes) -> bool:
+    """The firmware's rule (HostLinkCodec isJwtSigningInput): <b64url>.<b64url>, <= 512 bytes."""
+    parts = data.split(b".")
+    return (len(data) <= 512 and len(parts) == 2 and all(parts)
+            and all(c in _B64URL for c in parts[0] + parts[1]))
 
 
 def le32(v: int) -> bytes:
@@ -55,6 +66,12 @@ def err(code: int) -> bytes:
 def build_channel_msg(text: str, ts: int, snr: float = 0.0, path_len: int = 0xFF, idx: int = 0) -> bytes:
     return (bytes([CHAN_MSG]) + struct.pack("<b", int(round(snr * 4))) + b"\0\0"
             + bytes([idx, path_len, 0]) + le32(ts) + text.encode())
+
+
+def build_spark_channel_msg(text: str, ts: int, snr: float, rssi: int, path_len: int, path: bytes,
+                            idx: int = 0) -> bytes:
+    return (bytes([SPARK_CHAN_MSG]) + struct.pack("<bb", int(round(snr * 4)), rssi)
+            + bytes([idx, path_len, 0]) + le32(ts) + bytes([len(path)]) + path + text.encode())
 
 
 def build_room_post(author4: bytes, text: str, ts: int, room_prefix: bytes = OWN_PUBKEY[:6]) -> bytes:
@@ -85,7 +102,7 @@ def build_self_info(name: str = "SparkNode") -> bytes:
             + le32(869525) + le32(250000) + bytes([11, 5]) + name.encode())
 
 
-STUB_VERSION = "v1.18.0-SparkNode1.2"
+STUB_VERSION = "v1.18.0-SparkNode1.3"
 
 
 def build_device_info(version: str = STUB_VERSION, repeat: bool = True) -> bytes:
@@ -118,7 +135,13 @@ class StubNode:
         self.posts: list[Post] = []
         self.cursor = 0
         self.skip: set[int] = set()  # host-originated posts: not echoed until the next APP_START
-        self.ring: deque[bytes] = deque(maxlen=32)
+        # channel ring: (text, ts, snr, rssi, packed path_len, path bytes)
+        self.ring: deque[tuple] = deque(maxlen=32)
+        self.features = 0          # SparkNode1.3 host features of the (single) session
+        self.rx_pushed = 0
+        self._sign: bytearray | None = None
+        from Crypto.PublicKey import ECC
+        self.sign_key = ECC.generate(curve="ed25519")  # the stub's identity for SIGN_* (not OWN_PUBKEY)
         self.contacts: list[tuple[bytes, str, int]] = []
         self.cli_replies = {"get repeat": "> on", "ver": "v1.18.0-SparkNode1"}
         # test hooks
@@ -157,6 +180,16 @@ class StubNode:
         return v is not None and v >= SENDER_NAME_VERSION
 
     @property
+    def v13(self) -> bool:
+        from .nodelink import FEATURES_VERSION, spark_node_version
+        v = spark_node_version(self.version)
+        return v is not None and v >= FEATURES_VERSION
+
+    @property
+    def sign_pubkey(self) -> bytes:
+        return self.sign_key.public_key().export_key(format="raw")
+
+    @property
     def connected(self) -> bool:
         return bool(self._writers)
 
@@ -165,10 +198,25 @@ class StubNode:
         return int(self.clock()) + self.clock_offset
 
     # --- injection hooks -----------------------------------------------------
-    def inject_channel(self, sender: str, text: str, ts: int | None = None, snr: float = 5.0, hops: int = 2) -> None:
+    def inject_channel(self, sender: str, text: str, ts: int | None = None, snr: float = 5.0, hops: int = 2,
+                       path: bytes | None = None, hash_size: int = 1, rssi: int = -95) -> None:
+        """A Public message heard by the node; `path` defaults to `hops` made-up hashes."""
         ts = self.now() if ts is None else ts
-        self.ring.append(build_channel_msg(f"{sender}: {text}", ts, snr, hops))
+        if hops == 0xFF:
+            plen, path = 0xFF, b""
+        else:
+            plen = ((hash_size - 1) << 6) | hops
+            path = bytes(range(0x11, 0x11 + hops * hash_size)) if path is None else path
+        self.ring.append((f"{sender}: {text}", ts, snr, rssi, plen, path))
         self._push(bytes([PUSH_MSG_WAITING]))
+
+    def inject_rx(self, raw: bytes, snr: float = 5.0, rssi: int = -95) -> bool:
+        """A packet the radio received: LOG_RX_DATA if the host enabled RX_LOG."""
+        if not self.features & 1 or len(raw) + 3 > 176:
+            return False
+        self._push(bytes([PUSH_LOG_RX]) + struct.pack("<bb", int(round(snr * 4)), rssi) + raw)
+        self.rx_pushed += 1
+        return True
 
     def inject_room_post(self, author4: bytes | str, text: str, ts: int | None = None) -> None:
         a = bytes.fromhex(author4) if isinstance(author4, str) else author4
@@ -238,6 +286,8 @@ class StubNode:
             return [err(1)]
         c = p[0]
         if c == 1:  # APP_START
+            self.features = 0
+            self._sign = None
             self.cursor = 0
             self.skip.clear()
             out = [build_self_info(self.name)]
@@ -311,8 +361,34 @@ class StubNode:
                 post = self.posts[i]
                 return [build_room_post(post.author4, post.text, post.ts)]
             if self.ring:
-                return [self.ring.popleft()]
+                text, ts, snr, rssi, plen, path = self.ring.popleft()
+                if self.features & 2:
+                    return [build_spark_channel_msg(text, ts, snr, rssi, plen, path)]
+                return [build_channel_msg(text, ts, snr, plen)]
             return [bytes([NO_MORE])]
+        if c == SPARK_FEATURES and self.v13:
+            if len(p) < 2:
+                return [err(6)]
+            bits = p[1] if len(p) < 5 else struct.unpack("<I", p[1:5])[0]
+            self.features = bits & 3
+            return [bytes([OK]) + le32(self.features)]
+        if c in (33, 34, 35) and self.v13:
+            if c == 33:
+                self._sign = bytearray()
+                return [bytes([SIGN_START, 0]) + le32(512)]
+            if self._sign is None:
+                return [err(4)]
+            if c == 34:
+                if len(self._sign) + len(p) - 1 > 512:
+                    self._sign = None
+                    return [err(3)]
+                self._sign += p[1:]
+                return [bytes([OK])]
+            data, self._sign = bytes(self._sign), None
+            if not is_jwt_signing_input(data):
+                return [err(6)]
+            from Crypto.Signature import eddsa
+            return [bytes([SIGNATURE]) + eddsa.new(self.sign_key, "rfc8032").sign(data)]
         if c == 4:
             out = [bytes([CONTACTS_START]) + le32(len(self.contacts))]
             for pk, name, t in self.contacts:

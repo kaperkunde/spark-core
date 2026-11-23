@@ -18,7 +18,7 @@ from typing import Awaitable, Callable
 import discord
 from discord import app_commands
 
-from .bridge import Bridge, BridgeError, ChannelGone, Inbound, NeedsConfirmation
+from .bridge import Bridge, BridgeError, ChannelGone, ChatClosed, Inbound, NeedsConfirmation
 from .config import Config
 
 log = logging.getLogger("spark_bridge.discord")
@@ -40,6 +40,10 @@ def webhook_username(author: str) -> str:
     return name[:80]
 
 
+def closed_session(exc: BaseException) -> bool:
+    return isinstance(exc, RuntimeError) and "session is closed" in str(exc).lower()
+
+
 class DiscordChat:
     """ChatPort implementation: webhook with bot-message fallback."""
 
@@ -49,7 +53,12 @@ class DiscordChat:
         self._hooks: dict[int, discord.Webhook | None] = {}
         self._retry_at: dict[int, float] = {}
 
+    def _check_open(self) -> None:
+        if self.client.is_closed():
+            raise ChatClosed()
+
     async def _channel(self, channel_id: int):
+        self._check_open()
         ch = self.client.get_channel(channel_id)
         if ch is None:
             try:
@@ -68,6 +77,10 @@ class DiscordChat:
             if exc.code == UNKNOWN_CHANNEL:
                 self._hooks.pop(channel_id, None)
                 raise ChannelGone(channel_id) from exc
+            raise
+        except RuntimeError as exc:
+            if closed_session(exc):   # shutdown or restart: aiohttp session already closed
+                raise ChatClosed() from None
             raise
 
     async def _webhook(self, ch) -> discord.Webhook | None:
@@ -94,12 +107,21 @@ class DiscordChat:
 
     async def send_as(self, channel_id: int, author: str, text: str) -> None:
         ch = await self._channel(channel_id)
-        wh = await self._webhook(ch)
+        try:
+            wh = await self._webhook(ch)
+        except RuntimeError as exc:
+            if closed_session(exc):
+                raise ChatClosed() from None
+            raise
         if wh is not None:
             try:
                 await wh.send(content=text[:2000], username=webhook_username(author),
                               allowed_mentions=NO_MENTIONS)
                 return
+            except RuntimeError as exc:
+                if closed_session(exc):
+                    raise ChatClosed() from None
+                raise
             except discord.NotFound:
                 self._hooks.pop(channel_id, None)  # deleted: look it up again next time
             except discord.HTTPException as exc:
@@ -109,7 +131,7 @@ class DiscordChat:
 
     async def react(self, channel_id: int, message_id: int, emoji: str) -> None:
         ch = await self._channel(channel_id)
-        await ch.get_partial_message(message_id).add_reaction(emoji)
+        await self._guard(channel_id, ch.get_partial_message(message_id).add_reaction(emoji))
 
     async def notice(self, channel_id: int, text: str) -> None:
         ch = await self._channel(channel_id)
@@ -227,6 +249,9 @@ class SparkClient(discord.Client):
             if ch.report and self.guild_ok(ch.guild_id):
                 try:
                     await self.chat.notice(ch.channel_id, text)
+                except ChatClosed:
+                    log.info("Discord is closed; report not posted")
+                    return
                 except ChannelGone:
                     self.bridge.forget_channel(ch.channel_id, "Unknown Channel (404)")
                 except Exception:  # noqa: BLE001
@@ -320,6 +345,12 @@ def build_group(client: SparkClient) -> app_commands.Group:
     @app_commands.choices(state=ONOFF)
     async def report(it: discord.Interaction, state: app_commands.Choice[int]):
         async def f(): return setter(it, report=bool(state.value))
+        await guarded(it, True, f)
+
+    @group.command(name="footer", description="Hops, SNR and route under Public messages in this channel")
+    @app_commands.choices(state=ONOFF)
+    async def footer(it: discord.Interaction, state: app_commands.Choice[int]):
+        async def f(): return setter(it, footer=bool(state.value))
         await guarded(it, True, f)
 
     @group.command(name="health", description="Node health now (admin channels only)")

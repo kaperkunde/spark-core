@@ -26,9 +26,14 @@ async def test_end_to_end(stub):
     try:
         await wait_for(lambda: node.connected and bridge.store.get_meta("initialized"))
         assert chat.sent == []
-        stub.inject_channel("Bob", "hello", ts=T0)
+        # SparkNode1.3: the route comes along; a known repeater is shown by name
+        bridge.store.set_name("1112aaaa", "NL-AMS-DAR1", 2)
+        stub.inject_channel("Bob", "hello", ts=T0, hops=2, hash_size=2, path=bytes.fromhex("1112c3d4"), snr=5.0)
         await wait_for(lambda: chat.sent)
-        assert chat.sent[0] == (1, "Bob", "hello")
+        assert chat.sent[0] == (1, "Bob", "hello\n-# 2 hops · SNR 5.0 dB · via NL-AMS-DAR1 → c3d4")
+        assert node.features == 2   # route on, no raw RX feed without an observer
+        row = bridge.store.seen_meta("c", T0, __import__("spark_bridge.textlimits").textlimits.text_hash("Bob: hello"))
+        assert (row["snr"], row["rssi"], row["hops"], row["path"]) == (5.0, -95, 2, "1112,c3d4")
         await bridge.on_discord_message(Inbound(1, 1, 7, 3, "robin", "from discord"))
         # SparkNode1.2: the sender name goes in the frame, the room post keeps the [name] tag
         assert stub.transmitted == ["robin: from discord"] and stub.room_pushed == ["[robin] from discord"]

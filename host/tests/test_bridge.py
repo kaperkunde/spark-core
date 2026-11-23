@@ -607,3 +607,70 @@ def test_public_enable_is_logged_with_who_and_when(env, caplog):
     assert "Public enabled by <@4242>, 2023-11-14 22:13 UTC" in b.status(CHAT)
     b.configure(CHAT, GUILD, 99, send_target="none")
     assert b.store.last_audit(CHAT, "send public off") == (int(clock.t), 99)
+
+
+# ---- SparkBridge1.3: hops, SNR and route; send logging; closed Discord session ----------------
+
+from spark_bridge.bridge import ChatClosed  # noqa: E402
+
+
+async def test_footer_formats_and_per_channel_switch(env):
+    b, node, chat, _ = env
+    cfg(b, READ, receive_source="public")
+    cfg(b, CHAT, receive_source="public", footer=False)
+    b.store.set_name("a1b2c3d4", "NL-AMS-DAR1", 2)
+    b.store.set_name("c3d40000", "Bella Vista", 2)
+    await b.on_channel_msg(ChannelMsg(1, "Bob: hi", snr=5.0, rssi=-90, hops=2, hash_size=2,
+                                      path=bytes.fromhex("a1b2c3d4")))
+    assert (READ, "Bob", "hi\n-# 2 hops · SNR 5.0 dB · via NL-AMS-DAR1 → Bella Vista") in chat.sent
+    assert (CHAT, "Bob", "hi") in chat.sent
+    chat.sent.clear()
+    await b.on_channel_msg(ChannelMsg(2, "Bob: direct", snr=-3.25, hops=0))
+    assert chat.sent[0] == (READ, "Bob", "direct\n-# direct · SNR -3.2 dB")
+    # older node: no SNR/hops at all -> no footer
+    chat.sent.clear()
+    await b.on_channel_msg(ChannelMsg(3, "Bob: old"))
+    assert chat.sent[0] == (READ, "Bob", "old")
+    assert "footer under Public messages (hops, SNR, route): off" in b.status(CHAT)
+
+
+def test_footer_route_fallbacks(env):
+    b, *_ = env
+    b.store.set_name("a1000000", "Rep A", 2)
+    b.store.set_name("a1ff0000", "Rep B", 2)      # same 1-byte hash: ambiguous
+    b.store.set_name("b2000000", "Kid", 1)        # a client never names a hop if...
+    b.store.set_name("b2110000", "Roof", 3)       # ...a relay matches
+    m = ChannelMsg(1, "x: y", snr=1.0, hops=3, path=bytes.fromhex("a1b2c4"))
+    assert b.footer(m) == "3 hops · SNR 1.0 dB · via a1 → Roof → c4"
+    cut = ChannelMsg(1, "x: y", snr=1.0, hops=3, hash_size=2, path=bytes.fromhex("a100"))
+    assert b.footer(cut) == "3 hops · SNR 1.0 dB · via Rep A → …"
+    assert b.footer(ChannelMsg(1, "x: y", snr=2.0, hops=1)) == "1 hop · SNR 2.0 dB"
+
+
+async def test_sends_are_logged_without_room_text(env, caplog):
+    import logging
+    b, node, chat, _ = env
+    cfg(b, CHAT, send_target="both")
+    with caplog.at_level(logging.INFO, logger="spark_bridge.bridge"):
+        await b.on_discord_message(msg(CHAT, "secret family plans"))
+    lines = [r.getMessage() for r in caplog.records]
+    pub = [l for l in lines if l.startswith("discord -> public")]
+    room = [l for l in lines if l.startswith("discord -> room")]
+    assert pub and f"channel {CHAT}" in pub[0] and "robin" in pub[0] and "secret family plans" in pub[0]
+    assert room and "robin" in room[0] and "bytes" in room[0] and "secret" not in room[0]
+
+
+async def test_closed_discord_session_is_quiet(env, caplog):
+    import logging
+    b, node, chat, _ = env
+    cfg(b, ADMIN, admin=True, receive_source="public")
+
+    async def closed(*a):
+        raise ChatClosed()
+
+    chat.notice = closed
+    chat.send_as = closed
+    with caplog.at_level(logging.INFO):
+        await b.on_link_down()
+        await b.on_channel_msg(ChannelMsg(9, "Bob: late"))
+    assert not [r for r in caplog.records if r.levelno >= logging.ERROR]

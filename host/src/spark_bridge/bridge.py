@@ -6,6 +6,7 @@ Per Discord channel (stored in SQLite, see store.ChannelConfig):
                                       (public/both needs an explicit confirmation)
   receive  none|public|room|both      mesh -> Discord
   report   on/off      daily health line and link up/down notices here
+  footer   on/off      hops, SNR and route under Public messages (default on)
 """
 
 from __future__ import annotations
@@ -126,6 +127,15 @@ DANGEROUS_CLI = ("password", "set password", "set guest.password", "set prv.key"
                  "erase", "start ota", "set ble.pin", "dfu")
 
 
+LOG_TEXT_MAX = 40
+
+
+def shorten(text: str, n: int = LOG_TEXT_MAX) -> str:
+    """Public text for a log line: one line, at most n characters."""
+    one = " ".join(text.split())
+    return one if len(one) <= n else one[: n - 1] + "…"
+
+
 @dataclass
 class Inbound:
     """A human message in a Discord channel."""
@@ -212,6 +222,10 @@ class NeedsConfirmation(BridgeError):
         self.target = target
 
 
+class ChatClosed(Exception):
+    """The chat client is shutting down (e.g. aiohttp "Session is closed"): drop quietly."""
+
+
 class ChannelGone(Exception):
     """The Discord channel no longer exists (404 Unknown Channel, code 10003)."""
 
@@ -225,6 +239,7 @@ class Bridge:
                  clock: Callable[[], float] = time.time):
         self.store, self.node, self.chat, self.cfg, self.clock = store, node, chat, cfg, clock
         self.health = None  # set by __main__ (HealthMonitor), optional
+        self.observer = None  # set by __main__ (observer.Observer), optional
         self._suppress = False
         self._recent: dict[str, float] = {}
         self._window = SlidingWindow(0, clock)
@@ -279,13 +294,16 @@ class Bridge:
             if ch.report:
                 try:
                     await self.chat.notice(ch.channel_id, text)
+                except ChatClosed:
+                    log.info("Discord is closed; notice not posted: %s", text)
+                    return
                 except ChannelGone:
                     self.forget_channel(ch.channel_id, "Unknown Channel (404)")
                 except Exception:  # noqa: BLE001
                     log.exception("notice to %s failed", ch.channel_id)
 
     async def on_advert(self, pubkey: str, name: str, adv_type: int = 0) -> None:
-        self.store.set_name(pubkey[:8], name)
+        self.store.set_name(pubkey[:8], name, adv_type or None)
 
     async def on_poll(self, sample: dict[str, Any]) -> None:
         if self.health:
@@ -300,19 +318,40 @@ class Bridge:
     def _is_recent(self, text: str) -> bool:
         return self._recent.get(text_hash(text), 0) > self.clock()
 
+    def route_names(self, msg: ChannelMsg) -> list[str]:
+        """The route as repeater names where known (hash prefix match), else hex."""
+        return [self.store.hop_name(h) or h for h in msg.hop_hashes()]
+
+    def footer(self, msg: ChannelMsg) -> str:
+        """Compact line for Discord: `2 hops · SNR 5.0 dB · via A → B`, or `direct · SNR ...`."""
+        if msg.hops is None:
+            return ""
+        parts = ["direct" if msg.direct or msg.hops == 0 else f"{msg.hops} hop{'s' if msg.hops != 1 else ''}"]
+        if msg.snr is not None:
+            parts.append(f"SNR {msg.snr:.1f} dB")
+        names = self.route_names(msg)
+        if names:
+            more = "" if msg.path_complete else " → …"
+            parts.append("via " + " → ".join(names) + more)
+        return " · ".join(parts)
+
     async def on_channel_msg(self, msg: ChannelMsg) -> None:
         if msg.channel != 0:
             return
         h = text_hash(msg.text)
         if self.store.seen("c", msg.ts, "", h):
             return
-        self.store.mark_seen("c", msg.ts, "", h)
+        route = ",".join(msg.hop_hashes()) if msg.path is not None else None
+        self.store.mark_seen("c", msg.ts, "", h, snr=msg.snr, rssi=msg.rssi,
+                             hops=-1 if msg.direct else msg.hops, path=route)
+        author, body = split_author(msg.text)
+        log.info("public from %s: %s, rssi %s, route %s: %s", author, self.footer(msg).split(" · via")[0] or "no meta",
+                 msg.rssi if msg.rssi is not None else "-", route if route is not None else "-", shorten(body))
         if self._suppress:
             return
-        author, body = split_author(msg.text)
         if self._is_recent(body) or self._is_recent(msg.text):
             return
-        await self._fan_out("public", author, body)
+        await self._fan_out("public", author, body, footer=self.footer(msg))
 
     async def on_room_post(self, post: RoomPost) -> None:
         h = text_hash(post.text)
@@ -338,12 +377,17 @@ class Bridge:
             author = author or f"node {post.author}"
         await self._fan_out("room", author, post.text)
 
-    async def _fan_out(self, source: str, author: str, text: str, skip_channel: int | None = None) -> None:
+    async def _fan_out(self, source: str, author: str, text: str, skip_channel: int | None = None,
+                       footer: str = "") -> None:
         for ch in self.store.all_channels():
             if ch.channel_id == skip_channel or not ch.receives(source):
                 continue
+            out = f"{text}\n-# {footer}" if footer and ch.footer else text   # -# = Discord subtext
             try:
-                await self.chat.send_as(ch.channel_id, author, text)
+                await self.chat.send_as(ch.channel_id, author, out)
+            except ChatClosed:
+                log.info("Discord is closed; message from %s not delivered", author)
+                return
             except ChannelGone:
                 self.forget_channel(ch.channel_id, "Unknown Channel (404)")
             except Exception:  # noqa: BLE001
@@ -396,6 +440,8 @@ class Bridge:
                 else:
                     await self.node.send_public(text)
                 sent_to.append("public")
+                log.info("discord -> public: channel %s, sender %s, %d bytes%s: %s", m.channel_id, name,
+                         len(text.encode()), " (cut)" if cut else "", shorten(text))
             except LinkError as exc:
                 log.warning("public send failed: %s", exc)
                 failed = True
@@ -407,6 +453,9 @@ class Bridge:
                 self.store.add_sent(text_hash(text), self.clock())
                 await self.node.post_room(text)
                 sent_to.append("room")
+                # never the text of a room post (the room is private)
+                log.info("discord -> room: channel %s, sender %s, %d bytes%s", m.channel_id, name,
+                         len(text.encode()), " (cut)" if cut else "")
             except LinkError as exc:
                 log.warning("room post failed: %s", exc)
                 failed = True
@@ -478,7 +527,13 @@ class Bridge:
                 f"- send (Discord to mesh): {send}\n"
                 f"- receive (mesh to Discord): {ch.receive_source}\n"
                 f"- daily report and link notices: {onoff(ch.report)}\n"
+                f"- footer under Public messages (hops, SNR, route): {onoff(ch.footer)}\n"
+                f"{self.observer_line()}"
                 f"Link to node: {link}")
+
+    def observer_line(self) -> str:
+        obs = getattr(self, "observer", None)
+        return f"MQTT observer: {obs.summary()}\n" if obs is not None else ""
 
     def status(self, channel_id: int) -> str:
         return self.describe(self.store.get_channel(channel_id), channel_id)
@@ -550,7 +605,7 @@ class Bridge:
             for _ in range(WHERE_MAX_PAGES):
                 found, start = parse_members(await self.node.cli("members" if not start else f"members {start}"))
                 for prefix, name, _admin in found:
-                    self.store.set_name(prefix, name)
+                    self.store.set_name(prefix, name, 1)   # members are clients, not relays
                     n += 1
                 if start is None:
                     break

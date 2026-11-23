@@ -46,7 +46,7 @@ async def test_handshake(stub):
     link = mklink(stub, rec)
     await link.connect()
     try:
-        assert link.node_name == "SparkNode" and link.version == "v1.18.0-SparkNode1.2"
+        assert link.node_name == "SparkNode" and link.version == "v1.18.0-SparkNode1.3"
         assert link.supports_sender
         assert link.own_prefix == H("a1b2c3d4e5f6") and link.own_author == "a1b2c3d4"
         codes = [f[0] for f in stub.received]
@@ -274,6 +274,28 @@ async def test_ble_uses_os_connected_peripheral_after_failed_scans(monkeypatch):
     assert looked and isinstance(calls[-1]["device"], FakeBleDevice) and "address" not in calls[-1]
 
 
+async def test_ble_alternates_fresh_scans_with_os_connected(monkeypatch):
+    calls = []
+
+    async def fake_create_ble(**kw):
+        calls.append("device" if "device" in kw else "scan")
+        return None
+
+    monkeypatch.setattr("spark_bridge.nodelink.MeshCore.create_ble", fake_create_ble)
+    link = NodeLink(NodeConfig(transport="ble", ble_direct_after=3))
+
+    async def finder():
+        return FakeBleDevice()
+
+    link._find_connected_ble = finder
+    for _ in range(9):
+        with pytest.raises(LinkError):
+            await link._create()
+        link._fail_streak += 1
+    # a marginal link: the OS keeps listing the peripheral, the bridge still mostly scans
+    assert calls == ["scan"] * 3 + ["device", "scan", "scan", "device", "scan", "scan"]
+
+
 async def test_find_connected_ble_matches_name_and_address(monkeypatch):
     import bleak
 
@@ -374,6 +396,13 @@ def test_spark_node_version_and_sender_support():
     assert spark_node_version("v1.18.0-SparkNode1.1") == (1, 1)
     assert spark_node_version("v1.18.0-SparkNode1.2") == (1, 2)
     assert spark_node_version("v1.18.0-SparkNode1.10") == (1, 10)
+    assert spark_node_version("v1.18.0-SparkNode1.3") == (1, 3)
+    assert spark_node_version("v1.18.0-SparkNode1.3 (patch 1)") == (1, 3)
+    assert spark_node_version("v1.18.0-SparkNode1.3.1") == (1, 3)
+    # the old development label is older than every release, not "2.0"
+    assert spark_node_version("v1.18.0-SparkNode2") == (0, 2) < (1, 2)
+    assert spark_node_version("v1.18.0-SparkNode2.0") == (2, 0)
+    assert spark_node_version("v1.18.0-SparkNodeX") is None
     assert spark_node_version("v1.18.0") is None and spark_node_version("") is None
 
 

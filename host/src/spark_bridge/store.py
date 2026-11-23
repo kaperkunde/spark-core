@@ -1,4 +1,5 @@
-"""SQLite state: per-channel behaviour, dedup, names, aliases, audit, battery samples, link events."""
+"""SQLite state: per-channel behaviour, dedup (with each message's SNR, RSSI, hops and route),
+names, aliases, audit, battery samples, link events."""
 
 from __future__ import annotations
 
@@ -22,6 +23,7 @@ CREATE TABLE IF NOT EXISTS channels(
   rate_per_minute INTEGER NOT NULL DEFAULT 3,
   receive_source TEXT NOT NULL DEFAULT 'none',
   report INTEGER NOT NULL DEFAULT 0,
+  footer INTEGER NOT NULL DEFAULT 1,
   updated_by INTEGER,
   updated_at INTEGER
 );
@@ -42,6 +44,17 @@ CREATE TABLE IF NOT EXISTS audit(ts INTEGER NOT NULL, channel_id INTEGER NOT NUL
   action TEXT NOT NULL);
 """
 
+# Columns added after the first release: (table, column, declaration). Added on open if missing.
+MIGRATIONS = (
+    ("channels", "footer", "INTEGER NOT NULL DEFAULT 1"),
+    ("seen_posts", "snr", "REAL"),
+    ("seen_posts", "rssi", "INTEGER"),
+    ("seen_posts", "hops", "INTEGER"),
+    ("seen_posts", "path", "TEXT"),
+    ("names", "adv_type", "INTEGER NOT NULL DEFAULT 0"),
+)
+REPEATER_TYPES = (2, 3)   # advert types that relay: repeater, room server
+
 SEEN_KEEP = 500
 SENT_KEEP_SECONDS = 24 * 3600
 
@@ -57,6 +70,7 @@ class ChannelConfig:
     rate_per_minute: int = 3
     receive_source: str = "none"
     report: bool = False
+    footer: bool = True   # hops / SNR / route under Public messages
 
     def sends_to(self, target: str) -> bool:
         return self.send_target in (target, "both")
@@ -70,6 +84,7 @@ class ChannelConfig:
             and self.send_target == "none"
             and self.receive_source == "none"
             and not self.report
+            and self.footer
             and self.prefix
             and self.rate_mode == "channel"
             and self.rate_per_minute == default_rate
@@ -83,6 +98,10 @@ class Store:
         self.db = sqlite3.connect(str(path))
         self.db.row_factory = sqlite3.Row
         self.db.executescript(SCHEMA)
+        for table, col, decl in MIGRATIONS:
+            cols = {r["name"] for r in self.db.execute(f"PRAGMA table_info({table})")}
+            if col not in cols:
+                self.db.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
         self.db.commit()
 
     def close(self) -> None:
@@ -101,6 +120,7 @@ class Store:
             rate_per_minute=r["rate_per_minute"],
             receive_source=r["receive_source"],
             report=bool(r["report"]),
+            footer=bool(r["footer"]),
         )
 
     def get_channel(self, channel_id: int) -> ChannelConfig | None:
@@ -113,13 +133,14 @@ class Store:
     def save_channel(self, cfg: ChannelConfig, user_id: int | None = None) -> None:
         self.db.execute(
             "INSERT INTO channels(channel_id,guild_id,admin,send_target,prefix,rate_mode,"
-            "rate_per_minute,receive_source,report,updated_by,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?) "
+            "rate_per_minute,receive_source,report,footer,updated_by,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?) "
             "ON CONFLICT(channel_id) DO UPDATE SET guild_id=excluded.guild_id, admin=excluded.admin, "
             "send_target=excluded.send_target, prefix=excluded.prefix, rate_mode=excluded.rate_mode, "
             "rate_per_minute=excluded.rate_per_minute, receive_source=excluded.receive_source, "
-            "report=excluded.report, updated_by=excluded.updated_by, updated_at=excluded.updated_at",
+            "report=excluded.report, footer=excluded.footer, updated_by=excluded.updated_by, "
+            "updated_at=excluded.updated_at",
             (cfg.channel_id, cfg.guild_id, int(cfg.admin), cfg.send_target, int(cfg.prefix),
-             cfg.rate_mode, cfg.rate_per_minute, cfg.receive_source, int(cfg.report),
+             cfg.rate_mode, cfg.rate_per_minute, cfg.receive_source, int(cfg.report), int(cfg.footer),
              user_id, int(time.time())),
         )
         self.db.commit()
@@ -145,10 +166,14 @@ class Store:
             (kind, ts, author, text_hash),
         ).fetchone() is not None
 
-    def mark_seen(self, kind: str, ts: int, author: str, text_hash: str) -> None:
+    def mark_seen(self, kind: str, ts: int, author: str, text_hash: str, *, snr: float | None = None,
+                  rssi: int | None = None, hops: int | None = None, path: str | None = None) -> None:
+        """Record a message (dedup key) with how it arrived: SNR, RSSI, hops (-1 = direct-routed)
+        and the route as comma-separated hop hashes."""
         self.db.execute(
-            "INSERT OR IGNORE INTO seen_posts VALUES(?,?,?,?,?)",
-            (kind, ts, author, text_hash, int(time.time())),
+            "INSERT OR IGNORE INTO seen_posts(kind,ts,author,text_hash,added,snr,rssi,hops,path) "
+            "VALUES(?,?,?,?,?,?,?,?,?)",
+            (kind, ts, author, text_hash, int(time.time()), snr, rssi, hops, path),
         )
         # keep the last SEEN_KEEP rows (by insertion order)
         self.db.execute(
@@ -166,12 +191,35 @@ class Store:
         return self.db.execute("SELECT 1 FROM sent_posts WHERE text_hash=?", (text_hash,)).fetchone() is not None
 
     # --- names ----------------------------------------------------------
-    def set_name(self, prefix: str, name: str) -> None:
+    def seen_meta(self, kind: str, ts: int, text_hash: str) -> sqlite3.Row | None:
+        return self.db.execute("SELECT snr, rssi, hops, path FROM seen_posts WHERE kind=? AND ts=? AND text_hash=?",
+                               (kind, ts, text_hash)).fetchone()
+
+    def set_name(self, prefix: str, name: str, adv_type: int | None = None) -> None:
+        """Name for a pubkey prefix (8 hex). adv_type None keeps the stored type."""
         self.db.execute(
-            "INSERT INTO names VALUES(?,?,?) ON CONFLICT(prefix) DO UPDATE SET name=excluded.name, updated=excluded.updated",
-            (prefix.lower(), name, int(time.time())),
+            "INSERT INTO names(prefix,name,updated,adv_type) VALUES(?,?,?,?) ON CONFLICT(prefix) DO UPDATE SET "
+            "name=excluded.name, updated=excluded.updated, "
+            "adv_type=CASE WHEN ? IS NULL THEN names.adv_type ELSE excluded.adv_type END",
+            (prefix.lower(), name, int(time.time()), adv_type or 0, adv_type),
         )
         self.db.commit()
+
+    def hop_name(self, hop_hex: str) -> str | None:
+        """The repeater (or room server) whose pubkey starts with this hop hash, if exactly one
+        known name matches. Names of other kinds (chat clients) only count when no relay does."""
+        hop = hop_hex.lower()
+        if not hop or len(hop) > 8 or any(c not in "0123456789abcdef" for c in hop):
+            return None
+        rows = self.db.execute("SELECT name, adv_type FROM names WHERE substr(prefix,1,?)=?", (len(hop), hop)).fetchall()
+        relays = {r["name"] for r in rows if r["adv_type"] in REPEATER_TYPES}
+        unknown = {r["name"] for r in rows if r["adv_type"] == 0}
+        for cand in (relays, unknown):
+            if len(cand) == 1:
+                return next(iter(cand))
+            if cand:
+                return None   # ambiguous: several relays share this hash
+        return None
 
     def get_name(self, prefix: str) -> str | None:
         r = self.db.execute("SELECT name FROM names WHERE prefix=?", (prefix.lower(),)).fetchone()

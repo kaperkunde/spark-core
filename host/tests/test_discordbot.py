@@ -24,7 +24,7 @@ async def test_client_constructs_with_group_and_commands():
     try:
         grp = client.tree.get_command("spark")
         names = {c.name for c in grp.commands}
-        assert names == {"status", "admin", "send", "prefix", "ratelimit", "receive", "report", "health", "cli",
+        assert names == {"status", "admin", "send", "prefix", "ratelimit", "receive", "report", "footer", "health", "cli",
                          "where", "alias"}
         assert {c.name for c in grp.get_command("alias").commands} == {"set", "list", "del"}
         assert client.intents.message_content
@@ -225,3 +225,27 @@ async def test_confirm_button_and_alias_commands():
     await alias.get_command("del").callback(it, user)
     assert br.store.get_alias(77) is None
     await client.close()
+
+
+async def test_closed_client_raises_chat_closed():
+    from spark_bridge.bridge import ChatClosed
+
+    cfg = Config()
+    client = SparkClient(cfg)
+    await client.close()   # shutdown: the session is gone
+    with pytest.raises(ChatClosed):
+        await client.chat.notice(123, "Link to the node is **down**; reconnecting.")
+    with pytest.raises(ChatClosed):
+        await client.chat.send_as(123, "Bob", "hi")
+
+    class Ch:
+        async def send(self, *a, **k):
+            raise RuntimeError("Session is closed")
+
+    client2 = SparkClient(cfg)
+    try:
+        client2.get_channel = lambda cid: Ch()
+        with pytest.raises(ChatClosed):
+            await client2.chat.notice(1, "x")
+    finally:
+        await client2.close()

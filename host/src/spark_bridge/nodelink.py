@@ -14,6 +14,12 @@ Lib calls used per contract command (meshcore 2.3.19), no raw frames were needed
   SYNC_NEXT_MESSAGE    commands.get_msg()   (reply events used directly, no subscriptions)
   GET_CONTACTS         commands.get_contacts()
   pushes               subscribe(MESSAGES_WAITING | NEW_CONTACT | DISCONNECTED) with sync callbacks
+  SIGN_*               commands.sign(data)  (SparkNode1.3, observer tokens)
+
+SparkNode1.3 frames the library does not know are handled before it (see _install_rx_hook):
+SPARK_HOST_FEATURES (0xC0) is sent with commands.send() (its reply is a plain OK + u32), the
+0xC1 channel message with route is turned into the library's CHANNEL_MSG_RECV event, and the
+LOG_RX_DATA push (0x88) goes straight to `rx_log` without the library's packet decoding.
 
 Every command goes through one lock: the lib matches replies by event type and a shared ERROR
 event, so overlapping commands could be answered with each other's errors.
@@ -47,13 +53,30 @@ class LinkGaveUp(Exception):
 
 NUS_SERVICE_UUID = "6E400001-B5A3-F393-E0A9-E50E24DCCA9E"  # MeshCore BLE UART service
 SENDER_NAME_VERSION = (1, 2)  # SparkNode1.2: SEND_CHANNEL_TXT_MSG takes a sender name
-_SPARK_VER = re.compile(r"SparkNode(\d+)(?:\.(\d+))?")
+FEATURES_VERSION = (1, 3)     # SparkNode1.3: SPARK_HOST_FEATURES, LOG_RX_DATA, 0xC1, SIGN_*
+CMD_SPARK_HOST_FEATURES = 0xC0
+RESP_SPARK_CHANNEL_MSG = 0xC1
+PUSH_LOG_RX_DATA = 0x88
+FEATURE_RX_LOG = 0x01
+FEATURE_CHANNEL_PATH = 0x02
+# "SparkNode<major>[.<minor>[.<patch>]]" not followed by more digits, dots or letters.
+_SPARK_VER = re.compile(r"SparkNode(\d+)(?:\.(\d+))?(?:\.(\d+))?(?![\w.])")
 
 
 def spark_node_version(version: str) -> tuple[int, int] | None:
-    """(major, minor) from a DEVICE_INFO version like "v1.18.0-SparkNode1.2"; None if not a SparkNode."""
+    """(major, minor) from a DEVICE_INFO version like "v1.18.0-SparkNode1.3"; None if not a SparkNode.
+
+    Releases are SparkNode1, SparkNode1.1, 1.2, 1.3 (a patch release keeps the 1.3 label, see
+    HOSTLINK.md). The old development label "SparkNode2" (no dot, major >= 2) predates them and
+    has none of their features: it counts as (0, 2). A real major release must carry a minor
+    ("SparkNode2.0")."""
     m = _SPARK_VER.search(version or "")
-    return (int(m[1]), int(m[2] or 0)) if m else None
+    if not m:
+        return None
+    major = int(m[1])
+    if m[2] is None and major >= 2:
+        return (0, major)
+    return (major, int(m[2] or 0))
 
 
 @dataclass
@@ -68,6 +91,64 @@ class ChannelMsg:
     ts: int
     text: str  # "<sender>: <message>"
     channel: int = 0
+    snr: float | None = None
+    rssi: int | None = None
+    hops: int | None = None      # None: unknown; 0 with direct=False: heard from the sender itself
+    direct: bool = False         # direct-routed (path_len 0xff)
+    hash_size: int = 1           # bytes per hop hash
+    path: bytes | None = None    # hop hashes, first repeater first (SparkNode1.3 0xC1); None: not sent
+
+    @property
+    def path_complete(self) -> bool:
+        return self.path is not None and self.hops is not None and len(self.path) >= self.hops * self.hash_size
+
+    def hop_hashes(self) -> list[str]:
+        """The route as hex hop hashes ("a1b2", ...), whole hops only."""
+        if not self.path:
+            return []
+        n = self.hash_size
+        return [self.path[i:i + n].hex() for i in range(0, len(self.path) - n + 1, n)]
+
+
+@dataclass
+class RxPacket:
+    """One LOG_RX_DATA push: a packet as the node's radio received it."""
+    recv_time: float
+    snr: float
+    rssi: int
+    raw: bytes
+
+
+def _path_fields(plen: int) -> dict[str, Any]:
+    if plen == 0xFF:
+        return {"path_len": 255, "path_hash_mode": -1}
+    return {"path_len": plen & 0x3F, "path_hash_mode": plen >> 6}
+
+
+def parse_spark_channel_msg(data: bytes) -> dict[str, Any] | None:
+    """RESP_SPARK_CHANNEL_MSG (0xC1) as the library's CHANNEL_MSG_RECV payload, plus RSSI and path."""
+    if len(data) < 11 or data[0] != RESP_SPARK_CHANNEL_MSG:
+        return None
+    n = data[10]
+    if len(data) < 11 + n:
+        return None
+    return {"type": "CHAN", "SNR": int.from_bytes(data[1:2], "little", signed=True) / 4,
+            "RSSI": int.from_bytes(data[2:3], "little", signed=True), "channel_idx": data[3],
+            **_path_fields(data[4]), "txt_type": data[5],
+            "sender_timestamp": int.from_bytes(data[6:10], "little"),
+            "path": bytes(data[11:11 + n]).hex(), "spark_route": True, "text": bytes(data[11 + n:]).decode("utf-8", "ignore")}
+
+
+def channel_msg_from_payload(p: dict[str, Any]) -> ChannelMsg:
+    plen = p.get("path_len")
+    mode = p.get("path_hash_mode", 0)
+    direct = plen == 255
+    path = p.get("path") if p.get("spark_route") else None
+    return ChannelMsg(ts=p["sender_timestamp"], text=p["text"], channel=p.get("channel_idx", 0),
+                      snr=p.get("SNR"), rssi=p.get("RSSI"),
+                      hops=None if plen is None else (0 if direct else int(plen)), direct=direct,
+                      hash_size=(mode + 1) if isinstance(mode, int) and mode >= 0 else 1,
+                      path=bytes.fromhex(path) if path is not None else None)
 
 
 class Handlers(Protocol):
@@ -91,6 +172,7 @@ class NodeLink:
         self._monotonic = monotonic
         self._bleak = None  # bleak client of the current BLE session, so close() can force it shut
         self._fail_streak = 0  # consecutive failed connection attempts
+        self._last_fail = ""
         self._down_since: float | None = None  # monotonic time the link was last lost
         self.mc: MeshCore | None = None
         self.connected = False
@@ -109,6 +191,10 @@ class NodeLink:
         self.pause_grace = pause_grace
         self.paused = False
         self._pause = asyncio.Event()
+        # SparkNode1.3: callback for LOG_RX_DATA (set by the observer), and what the node enabled
+        self.rx_log = None  # callable(RxPacket), sync
+        self.features = 0
+        self.rx_frames = 0
 
     # --- identity ------------------------------------------------------------
     @property
@@ -120,6 +206,10 @@ class NodeLink:
         """The node puts a host-supplied sender name on Public (SparkNode1.2 or later)."""
         v = spark_node_version(self.version)
         return v is not None and v >= SENDER_NAME_VERSION
+
+    @property
+    def node_version(self) -> tuple[int, int] | None:
+        return spark_node_version(self.version)
 
     @property
     def own_author(self) -> str:
@@ -138,12 +228,15 @@ class NodeLink:
             # No PIN: pairing is done once at OS level. An address without ':' is matched as a
             # substring of the BLE name ("SparkNode" matches "MeshCore-SparkNode").
             dev = None
-            if self._fail_streak >= c.ble_direct_after:
+            if self._direct_turn():
                 # A peripheral that is already connected does not advertise, so a scan cannot
-                # see it (stale CoreBluetooth/BlueZ connection). Ask the OS for it instead.
+                # see it (stale CoreBluetooth/BlueZ connection). Ask the OS for it instead, but
+                # only every third attempt: on a marginal link the OS often still lists a
+                # peripheral it cannot reach, and a fresh scan is the better default.
                 dev = await self._find_connected_ble()
                 if dev is not None:
-                    log.info("scans found nothing; using the OS-connected peripheral %s", dev)
+                    lvl = logging.INFO if self._fail_streak == c.ble_direct_after else logging.DEBUG
+                    log.log(lvl, "scans found nothing; trying the OS-connected peripheral %s", dev)
             if dev is not None:
                 mc = await MeshCore.create_ble(device=dev, **kw)
             else:
@@ -153,6 +246,11 @@ class NodeLink:
         self._bleak = getattr(getattr(mc, "connection_manager", None), "connection", None)
         self._bleak = getattr(self._bleak, "client", None)
         return mc
+
+    def _direct_turn(self) -> bool:
+        """BLE: use the OS-connected peripheral on this attempt (failure streak N, N+3, N+6, ...)."""
+        n = self.cfg.ble_direct_after
+        return self._fail_streak >= n and (self._fail_streak - n) % 3 == 0
 
     async def _find_connected_ble(self):
         """The node's BLEDevice if the OS reports it as already connected, else None
@@ -200,6 +298,7 @@ class NodeLink:
             mc.subscribe(EventType.DISCONNECTED, lambda ev: self._disconnected.set())
             mc.subscribe(EventType.MESSAGES_WAITING, lambda ev: self._waiting.set())
             mc.subscribe(EventType.NEW_CONTACT, self._advert_cb)
+            self._install_rx_hook(mc)
             ev = await self._cmd(mc.commands.send_appstart(timeout=self.cfg.command_timeout))
             self.pubkey = ev.payload.get("public_key", "")
             self.node_name = ev.payload.get("name", "") or self.node_name
@@ -212,6 +311,7 @@ class NodeLink:
                 await self._cmd(mc.commands.set_time(int(self._clock())))
             except LinkError as exc:
                 log.warning("SET_DEVICE_TIME refused (%s); node clock is ahead of this host", exc)
+            await self._enable_features(mc)
             await self._load_contacts()
         except BaseException:
             await self.close()
@@ -219,6 +319,55 @@ class NodeLink:
         self.connected = True
         self.sessions += 1
         log.info("connected to %s (%s)", self.node_name, self.version)
+
+    def _install_rx_hook(self, mc: MeshCore) -> None:
+        """Handle the SparkNode1.3 frames before the library sees them (it would drop 0xC1 and
+        decode every 0x88 packet itself)."""
+        reader = getattr(mc, "_reader", None)
+        if reader is None:
+            log.warning("meshcore library without _reader: SparkNode1.3 frames unavailable")
+            return
+        orig = reader.handle_rx
+        dispatcher = mc.dispatcher
+
+        async def handle_rx(data):
+            if data and data[0] == PUSH_LOG_RX_DATA:
+                self.rx_frames += 1
+                if self.rx_log is not None and len(data) > 3:
+                    pkt = RxPacket(self._clock(), int.from_bytes(data[1:2], "little", signed=True) / 4,
+                                   int.from_bytes(data[2:3], "little", signed=True), bytes(data[3:]))
+                    try:
+                        self.rx_log(pkt)
+                    except Exception:  # noqa: BLE001
+                        log.exception("rx_log handler failed")
+                return
+            if data and data[0] == RESP_SPARK_CHANNEL_MSG:
+                p = parse_spark_channel_msg(bytes(data))
+                if p is not None:
+                    from meshcore.events import Event
+                    await dispatcher.dispatch(Event(EventType.CHANNEL_MSG_RECV, p,
+                                                    {"channel_idx": p["channel_idx"], "txt_type": p["txt_type"]}))
+                    return
+            await orig(data)
+
+        reader.handle_rx = handle_rx
+
+    async def _enable_features(self, mc: MeshCore) -> None:
+        """SparkNode1.3: route with every channel message; the raw RX feed only for an observer."""
+        self.features = 0
+        v = self.node_version
+        if v is None or v < FEATURES_VERSION:
+            return
+        want = FEATURE_CHANNEL_PATH | (FEATURE_RX_LOG if self.rx_log is not None else 0)
+        try:
+            ev = await self._cmd(mc.commands.send(bytes([CMD_SPARK_HOST_FEATURES]) + want.to_bytes(4, "little"),
+                                                  [EventType.OK, EventType.ERROR]))
+            self.features = int((ev.payload or {}).get("value", 0))
+        except LinkError as exc:
+            log.warning("node did not take the host features (%s): no routes, no observer feed", exc)
+            return
+        log.info("node features: route %s, raw RX feed %s", "on" if self.features & FEATURE_CHANNEL_PATH else "off",
+                 "on" if self.features & FEATURE_RX_LOG else "off")
 
     async def close(self) -> None:
         """Tear the session down completely: the MeshCore object AND its bleak client.
@@ -309,6 +458,21 @@ class NodeLink:
         ev = await self._cmd(self._require().commands.run_cli_command(command))
         return ev.payload.get("text", "")
 
+    async def sign(self, data: bytes) -> bytes:
+        """Ed25519 signature by the node's identity (SparkNode1.3 SIGN_*: JWT signing input only)."""
+        mc = self._require()
+        try:
+            async with self._lock:
+                ev = await asyncio.wait_for(mc.commands.sign(data), self.cfg.command_timeout * 3)
+        except asyncio.TimeoutError:
+            raise LinkError("sign timed out") from None
+        if ev is None or ev.type == EventType.ERROR:
+            raise LinkError(f"sign refused: {ev.payload if ev else 'no reply'}")
+        sig = (ev.payload or {}).get("signature", b"")
+        if len(sig) != 64:
+            raise LinkError("bad signature length")
+        return bytes(sig)
+
     async def contacts(self) -> dict[str, Any]:
         ev = await self._cmd(self._require().commands.get_contacts())
         return ev.payload or {}
@@ -330,8 +494,7 @@ class NodeLink:
                         await self.handlers.on_room_post(
                             RoomPost(ts=p["sender_timestamp"], author=p.get("signature", ""), text=p["text"]))
                 elif ev.type == EventType.CHANNEL_MSG_RECV and self.handlers:
-                    await self.handlers.on_channel_msg(
-                        ChannelMsg(ts=p["sender_timestamp"], text=p["text"], channel=p["channel_idx"]))
+                    await self.handlers.on_channel_msg(channel_msg_from_payload(p))
 
     # --- supervisor -------------------------------------------------------------
     def stop(self) -> None:
@@ -423,7 +586,7 @@ class NodeLink:
                 await self.close()
                 raise
             except Exception as exc:  # noqa: BLE001
-                log.warning("link error: %s", exc)
+                self._log_failure(exc, was_up)
             was_connected = self.connected or was_up
             await self.close()
             self._fail_streak += 1
@@ -444,9 +607,21 @@ class NodeLink:
                           (self._monotonic() - self._down_since) / 60)
                 raise LinkGaveUp(f"no link for {limit / 60:.0f} minutes")
             wait = delay + self._rng.uniform(0, delay * 0.25)
-            log.info("reconnecting in %.1f s", wait)
+            log.log(logging.INFO if self._fail_streak <= 3 else logging.DEBUG, "reconnecting in %.1f s", wait)
             await self._sleep(wait)
             delay = min(delay * 2, self.cfg.backoff_max)
+
+    def _log_failure(self, exc: Exception, was_up: bool) -> None:
+        """A marginal link fails the same way for a long time: log the first failures and every
+        10th, or when the error changes; the rest goes to DEBUG."""
+        msg = str(exc) or type(exc).__name__
+        streak = self._fail_streak + 1
+        if was_up or streak <= 3 or streak % 10 == 0 or msg != self._last_fail:
+            suffix = f" (attempt {streak}; repeats are logged every 10th)" if streak > 3 else ""
+            log.warning("link error: %s%s", msg, suffix)
+        else:
+            log.debug("link error: %s (attempt %d)", msg, streak)
+        self._last_fail = msg
 
     async def _serve(self) -> None:
         """Serve one connection: drain on pushes, poll on a fixed schedule.
