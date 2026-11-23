@@ -63,8 +63,8 @@ class Broker:
 PRESETS: dict[str, list[Broker]] = {
     "dutchmeshcore-1": [Broker("dutchmeshcore-1", "collector1.dutchmeshcore.nl")],
     "dutchmeshcore-2": [Broker("dutchmeshcore-2", "collector2.dutchmeshcore.nl")],
-    "letsmesh-eu": [Broker("letsmesh-eu", "mqtt-eu-v1.letsmesh.net")],
-    "letsmesh-us": [Broker("letsmesh-us", "mqtt-us-v1.letsmesh.net")],
+    "letsmesh-eu": [Broker("letsmesh-eu", "mqtt-eu-v1.letsmesh.net", ws_path="/")],
+    "letsmesh-us": [Broker("letsmesh-us", "mqtt-us-v1.letsmesh.net", ws_path="/")],
 }
 PRESETS["dutchmeshcore"] = PRESETS["dutchmeshcore-1"] + PRESETS["dutchmeshcore-2"]
 PRESETS["letsmesh"] = PRESETS["letsmesh-eu"]
