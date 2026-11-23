@@ -241,3 +241,15 @@ async def test_stub_feed_and_node_signed_token(stub):
         obs.stop()
         link.stop()
         await asyncio.wait_for(asyncio.gather(*tasks, return_exceptions=True), 5)
+
+
+async def test_does_not_connect_to_an_old_node():
+    node, fb = SignNode(), FakeBroker()
+    node.node_version = (1, 2)
+    node.features = 0
+    obs = Observer(ObserverConfig(enabled=True, iata="AMS", brokers=["letsmesh-eu"]), node, client_factory=fb.factory)
+    task = asyncio.create_task(obs.run())
+    await asyncio.sleep(0.2)
+    assert fb.connects == [] and node.signed == [] and "needs SparkNode1.3" in obs.summary()
+    obs.stop()
+    await asyncio.wait_for(task, 10)

@@ -364,6 +364,10 @@ class Observer:
             if not self.pubkey or not getattr(self.node, "connected", False):
                 await self._sleep(1.0)   # the token needs the node; the topic needs its key
                 continue
+            v = getattr(self.node, "node_version", None)
+            if v is not None and v < (1, 3):
+                await self._sleep(5.0)   # no raw RX feed and no signing before SparkNode1.3
+                continue
             started = self._clock()
             try:
                 user, pw = await self.credentials(st.broker)
