@@ -9,15 +9,19 @@
 
 ## Versions and tags
 
-Each part has its own counter: **SparkNode1.2**, **SparkBridge1.2**, **SparkKids1**, and so on. The
-MeshCore base stays visible: the node reports `v1.18.0-SparkNode1.2`, SparkKids shows
-`SparkKids1 (MeshCore v1.18.0)`, the bridge package is `spark-bridge` version `1.2`
-(`spark-bridge --version` prints `SparkBridge1.2`). SparkNode1.1 and SparkBridge1.1 add Bluetooth
+Each part has its own counter: **SparkNode1.3**, **SparkBridge1.3**, **SparkKids1**, and so on. The
+MeshCore base stays visible: the node reports `v1.18.0-SparkNode1.3`, SparkKids shows
+`SparkKids1 (MeshCore v1.18.0)`, the bridge package is `spark-bridge` version `1.3`
+(`spark-bridge --version` prints `SparkBridge1.3`). SparkNode1.1 and SparkBridge1.1 add Bluetooth
 updates (`dfu`, `spark-bridge update`); the node also reports a build id (`get build`).
 SparkNode1.2 and SparkBridge1.2 add the HostLink sender name (Discord aliases on Public), the
 confirmation for Discord -> Public send, and the repeater's region/loop checks in the room
-server's relay. Git tags use the same names (`SparkNode1`, `SparkBridge1`, `SparkKids1`, then
-`SparkNode1.1`, `SparkBridge1.1`, `SparkNode1.2`, `SparkBridge1.2`). Version strings live in `variants/spark_p1/platformio.ini`
+server's relay. SparkNode1.3 and SparkBridge1.3 add the MQTT observer (raw RX feed, node-signed
+tokens), channel routes with hops/SNR footers, and send logging. Git tags use the same names
+(`SparkNode1`, `SparkBridge1`, `SparkKids1`, then `SparkNode1.1`, `SparkBridge1.1`, `SparkNode1.2`,
+`SparkBridge1.2`, `SparkNode1.3`, `SparkBridge1.3`). `FIRMWARE_VERSION` is limited to 20 bytes
+(`v1.18.0-SparkNode1.3` is exactly 20): a bug-fix release keeps that label and sets
+`-D SPARK_RELEASE_PATCH=<n>` (see HOSTLINK.md, "Version labels"). Version strings live in `variants/spark_p1/platformio.ini`
 (`FIRMWARE_VERSION`), `variants/spark_tdeck/platformio.ini` (`KIDS_FW_VERSION`) and
 `host/pyproject.toml` + `host/src/spark_bridge/__init__.py`.
 
