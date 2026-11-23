@@ -210,6 +210,7 @@ class BrokerState:
         self.dropped = 0
         self.last_error = ""
         self.retry_at: float | None = None
+        self.last_publish: float | None = None
 
     def put(self, payload: str) -> None:
         if len(self.queue) == self.queue.maxlen:
@@ -373,7 +374,10 @@ class Observer:
                 user, pw = await self.credentials(st.broker)
                 async with self._client(st, user, pw) as client:
                     st.connected, st.last_error, st.retry_at = True, "", None
-                    log.info("observer: connected to %s:%d", st.broker.host, st.broker.port)
+                    log.info("observer: connected to %s:%d (ws path %s), publishing to %s and %s",
+                             st.broker.host, st.broker.port,
+                             (st.broker.ws_path or self.cfg.ws_path) if st.broker.transport == "websockets" else "-",
+                             self.topic("packets"), self.topic("status"))
                     await self._serve(st, client)
             except asyncio.CancelledError:
                 raise
@@ -400,6 +404,7 @@ class Observer:
     async def _serve(self, st: BrokerState, client) -> None:
         await client.publish(self.topic("status"), self.status_message("online"), qos=0, retain=True)
         next_status = self._clock() + self.cfg.status_minutes * 60
+        next_stats = self._clock() + 300
         exp = self.token_expiry(st.broker)
         while not self._stop.is_set():
             if exp is not None and exp - self._clock() <= 300:
@@ -409,6 +414,12 @@ class Observer:
                 await client.publish(self.topic("packets"), st.queue[0], qos=0, retain=False)
                 st.queue.popleft()
                 st.sent += 1
+                st.last_publish = self._clock()
+            if self._clock() >= next_stats:
+                ago = "never" if st.last_publish is None else f"{int(self._clock() - st.last_publish)} s ago"
+                log.info("observer %s: sent %d, dropped %d, queued %d, last packet publish %s",
+                         st.broker.name, st.sent, st.dropped, len(st.queue), ago)
+                next_stats = self._clock() + 300
             if self._clock() >= next_status:
                 await client.publish(self.topic("status"), self.status_message("online"), qos=0, retain=True)
                 next_status = self._clock() + self.cfg.status_minutes * 60
