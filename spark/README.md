@@ -5,8 +5,8 @@ It turns one solar roof node into a hub for your household and your neighbourhoo
 
 | Part | Version | What it is |
 |---|---|---|
-| **SparkNode** | SparkNode1.2 (`v1.18.0-SparkNode1.2`) | Firmware for a SenseCAP Solar Node P1 on your roof: a MeshCore **room** with store-and-forward for your own people, and a **relay** that strengthens the local mesh. |
-| **Spark Bridge** | SparkBridge1.2 (`spark-bridge 1.2`) | A small Python service on a Raspberry Pi or computer near the node. It links the node to **Discord**, one-way or two-way, with MeshCore Public and with the SparkNode room. |
+| **SparkNode** | SparkNode1.3 (`v1.18.0-SparkNode1.3`) | Firmware for a SenseCAP Solar Node P1 on your roof: a MeshCore **room** with store-and-forward for your own people, and a **relay** that strengthens the local mesh. |
+| **Spark Bridge** | SparkBridge1.3 (`spark-bridge 1.3`) | A small Python service on a Raspberry Pi or computer near the node. It links the node to **Discord**, one-way or two-way, with MeshCore Public and with the SparkNode room, and can make the node an **MQTT observer** for MC-Radar / Let's Mesh. |
 | **SparkKids** | SparkKids1 | Firmware for a **LilyGO T-Deck Plus**: a simple touch messenger with location sharing for kids, or anyone who doesn't like fancy tech. A "dumb phone" without a service plan. |
 
 ```
@@ -141,7 +141,15 @@ in a frame and never stored by the bridge.
 **Parents' commands** (USB, LoRa admin login, or `/spark cli`): `members`, `member del <prefix|name>`,
 `member name <prefix> <name>`, `where`, `where <name>`.
 
-**Version.** `ver` prints `v1.18.0-SparkNode1.2 (Build: <date>) <build id>`; `get build` prints the version and build id.
+**Version.** `ver` prints `v1.18.0-SparkNode1.3 (Build: <date>) <build id>`; `get build` prints the version and build id.
+The version field is limited to 20 bytes, so a bug-fix release keeps the label `v1.18.0-SparkNode1.3`
+and is built with `-D SPARK_RELEASE_PATCH=1` (shown as `(patch 1)` by `ver` and `get spark`, i.e.
+SparkNode1.3.1); the build id already tells builds apart. Contract changes get a new minor version.
+
+**Observer feed (SparkNode1.3).** The node can hand every packet it receives to the bridge (HostLink
+LOG_RX_DATA, off unless the bridge asks for it per session), and signs the bridge's MQTT login token
+with its own key, so the station can be a [DutchMeshCore / MC-Radar observer](https://meshwiki.nl/wiki/Observer)
+without WiFi and without exporting its key. `get spark` shows `rxlog:<sent>/<dropped>`.
 
 ## Update over Bluetooth
 
@@ -169,7 +177,7 @@ done, anyone in Bluetooth range could send it firmware; the window is the few mi
 update. SparkNode1.1 also sends a Service Changed indication on the first secured connection after
 each boot, so bonded hosts re-read the GATT table after an update.
 
-**Node commands.** `dfu [force]`, `get build` (`> v1.18.0-SparkNode1.2 <git hash>[+]-<UTC time>`;
+**Node commands.** `dfu [force]`, `get build` (`> v1.18.0-SparkNode1.3 <git hash>[+]-<UTC time>`;
 `+` = built from uncommitted changes), `ver` (with the build id), `posts reset` (USB only:
 erase all stored room posts).
 
@@ -237,7 +245,13 @@ server id in `.env`, pair the node once over Bluetooth, start the service, then 
 Discord users post to the mesh under an alias (`/spark alias set`) or their display name; on
 Public a SparkNode1.2 node sends it as the sender name (`BadPirate: Hallo`). Enabling
 `/spark send public` (or `both`) asks for a confirmation after a warning: anyone in that Discord
-channel can then send to Public as your station.
+channel can then send to Public as your station. Public messages carry a small footer with hops,
+SNR and (SparkNode1.3) the route through named repeaters (`/spark footer on|off`).
+
+**MQTT observer.** With `BRIDGE_OBSERVER=1`, a region code (`BRIDGE_OBSERVER_IATA=AMS`) and the
+`dutchmeshcore` broker preset, the bridge publishes every packet the node hears to the DutchMeshCore
+collectors that feed MC-Radar (or Let's Mesh). No account is needed: the node signs the login
+token with its own key. `./setup.sh` asks for it; details in [host/README.md](../host/README.md).
 
 ## SparkKids
 

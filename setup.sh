@@ -391,6 +391,33 @@ if [ "$DO_BRIDGE" = 1 ]; then
     choose_port BRIDGE_SERIAL_PORT "node (for the bridge)"
   fi
   ask BRIDGE_DEFAULT_PER_MINUTE "Default messages per minute for a new Discord channel" "${BRIDGE_DEFAULT_PER_MINUTE:-3}"
+  info ""
+  info "MQTT observer (optional): publish every packet the node hears to the DutchMeshCore"
+  info "collectors (MC-Radar) or Let's Mesh. Needs SparkNode1.3. The bridge signs its login with"
+  info "the node's own key over the node link; there is no account or password for these brokers."
+  case "$BRIDGE_OBSERVER" in 1|true|yes|on) __obs=y ;; *) __obs=n ;; esac
+  if yesno "Enable the MQTT observer?" "$__obs"; then
+    BRIDGE_OBSERVER=1
+    ask_match BRIDGE_OBSERVER_BROKERS "Broker(s): dutchmeshcore, letsmesh-eu, letsmesh-us or mqtts://host:port, comma separated" \
+      "${BRIDGE_OBSERVER_BROKERS:-dutchmeshcore}" '^[A-Za-z0-9:/._, -]+$' "Preset names or URLs, comma separated"
+    ask_match BRIDGE_OBSERVER_IATA "Region code (IATA airport code, e.g. AMS, RTM, EIN)" "${BRIDGE_OBSERVER_IATA:-AMS}" \
+      '^[A-Za-z]{3,4}$' "3 or 4 letters"
+    BRIDGE_OBSERVER_IATA="$(printf '%s' "$BRIDGE_OBSERVER_IATA" | tr '[:lower:]' '[:upper:]')"
+    ask_text BRIDGE_OBSERVER_NAME "Observer name shown on the map (empty = the node name)" "$BRIDGE_OBSERVER_NAME" 31
+    ask_match BRIDGE_OBSERVER_OWNER "Your companion's public key, links the observer to you (64 hex, optional)" \
+      "$BRIDGE_OBSERVER_OWNER" '^([0-9A-Fa-f]{64})?$' "64 hex digits, or empty"
+    case "$BRIDGE_OBSERVER_BROKERS" in *://*)
+      info "A URL broker with a user name uses password login; the password goes in a variable you name."
+      ask BRIDGE_OBSERVER_USERNAME "MQTT user name (empty = node-signed token)" "$BRIDGE_OBSERVER_USERNAME"
+      if [ -n "$BRIDGE_OBSERVER_USERNAME" ]; then
+        ask_match BRIDGE_OBSERVER_PASSWORD_ENV "Name of the variable that holds the password" \
+          "${BRIDGE_OBSERVER_PASSWORD_ENV:-BRIDGE_OBSERVER_PASSWORD}" '^[A-Z_][A-Z0-9_]*$' "An environment variable name"
+        warn "Put ${BRIDGE_OBSERVER_PASSWORD_ENV}=<password> in $ENV_FILE or the service environment yourself."
+      fi ;;
+    esac
+  else
+    BRIDGE_OBSERVER=0
+  fi
 fi
 
 # write .env ----------------------------------------------------------------------------------
@@ -398,7 +425,9 @@ for k in SPARK_RADIO_PRESET SPARK_LORA_FREQ SPARK_LORA_BW SPARK_LORA_SF SPARK_LO
          SPARK_PATH_HASH_SIZE SPARK_NODE_NAME SPARK_NODE_LAT SPARK_NODE_LON SPARK_ADMIN_PASSWORD SPARK_ROOM_PASSWORD \
          SPARK_BLE_PIN KIDS_ROOM_KEY KIDS_ROOM_NAME KIDS_ROOM_PASSWORD KIDS_PARENT_PIN KIDS_PUBLIC_ENABLED \
          KIDS_PUBLIC_PER_HOUR DISCORD_TOKEN BRIDGE_GUILD_IDS BRIDGE_TRANSPORT BRIDGE_BLE_NAME BRIDGE_BLE_ADDRESS \
-         BRIDGE_SERIAL_PORT BRIDGE_DEFAULT_PER_MINUTE BRIDGE_TZ SPARK_TZ; do
+         BRIDGE_SERIAL_PORT BRIDGE_DEFAULT_PER_MINUTE BRIDGE_TZ SPARK_TZ BRIDGE_OBSERVER BRIDGE_OBSERVER_BROKERS \
+         BRIDGE_OBSERVER_IATA BRIDGE_OBSERVER_NAME BRIDGE_OBSERVER_OWNER BRIDGE_OBSERVER_USERNAME \
+         BRIDGE_OBSERVER_PASSWORD_ENV; do
   case " $KEYS " in *" $k "*) ;; *) KEYS="$KEYS $k" ;; esac
 done
 write_env_file
@@ -650,7 +679,7 @@ install_bridge() {
 
 title "Done"
 info "Configuration: $ENV_FILE"
-[ "$DO_NODE" = 1 ] && info "SparkNode: on the node's USB console 'ver' shows v1.18.0-SparkNode1.2. Later updates: ./setup.sh (ble)."
+[ "$DO_NODE" = 1 ] && info "SparkNode: on the node's USB console 'ver' shows v1.18.0-SparkNode1.3. Later updates: ./setup.sh (ble)."
 [ "$DO_BRIDGE" = 1 ] && info "Spark Bridge: in Discord, run /spark status in a channel, then /spark receive both."
 [ "$DO_KIDS" = 1 ] && info "SparkKids: type a name on the T-Deck; it logs in to the room by itself."
 info "More: spark/README.md"

@@ -1,4 +1,4 @@
-# Spark Bridge (SparkBridge1.2)
+# Spark Bridge (SparkBridge1.3)
 
 The Discord service of [Spark](../spark/README.md). It connects to a SparkNode (MeshCore room
 server with the HostLink firmware) over BLE, USB serial or TCP (stub node) and bridges the mesh
@@ -76,6 +76,7 @@ the bridge adds no user permission system.
 | `/spark alias del user:@user` | remove an alias: the Discord display name is used again |
 | `/spark ratelimit none\|channel\|user [per_minute]` | no limit, or N messages/minute per channel or per user (default 3) |
 | `/spark receive none\|public\|room\|both` | mesh to Discord source copied into this channel |
+| `/spark footer on\|off` | a small line under each Public message: `2 hops · SNR 5.0 dB · via NL-AMS-DAR1 → Bella Vista`, or `direct · SNR 5.0 dB` (default on; the route needs SparkNode1.3) |
 | `/spark report on\|off` | the daily health line (`BRIDGE_HEALTH_REPORT`, default 15:05 in `BRIDGE_TZ`) and link up/down notices here |
 | `/spark health` | health now, live from the node (admin channels) |
 | `/spark cli command:<text>` | node CLI command (admin channels) |
@@ -104,6 +105,19 @@ to 31 bytes. On Public a SparkNode1.2 node sends it as the sender name, so the m
 `[name] text` tag. Room posts are authored by the room itself, so they keep the `[name] text` tag
 (with the alias).
 
+**Hops, SNR and route (SparkBridge1.3).** Each Public message keeps how it arrived: SNR and hop
+count (all SparkNodes), RSSI and the hop hashes of the route (SparkNode1.3, HostLink frame 0xC1).
+They are logged, stored with the message's dedup row (`seen_posts`: snr, rssi, hops, path) and
+shown in the footer. Hop hashes are translated to names from the adverts the node has heard
+(`get names`, GET_CONTACTS, NEW_ADVERT pushes; kept in the `names` table): a hash names a
+repeater or room server when exactly one known relay's key starts with it (2-byte hashes make
+this reliable; 1-byte hashes often stay hex). Unknown or ambiguous hops are shown in hex; a route
+the node had to shorten ends in `→ …`.
+
+**Logging.** Every Discord to mesh send is logged at INFO: channel, target, sender name and length;
+Public text is logged shortened, room text never. Received Public messages are logged with SNR,
+hops, RSSI and route.
+
 Behaviour details:
 
 - Mesh to Discord uses a channel webhook named by `BRIDGE_WEBHOOK_NAME` (default "Spark Bridge") (found or created through the API,
@@ -125,6 +139,52 @@ Behaviour details:
 - Health: battery is sampled every `BRIDGE_HEALTH_SAMPLE_MINUTES`. The daily line (and `/spark health`) shows
   battery at 07:00 and 15:00 (nearest sample within 90 minutes, else `n/a`), the overnight change,
   uptime, noise floor and link availability over 24 h.
+
+## MQTT observer (MC-Radar / DutchMeshCore, Let's Mesh)
+
+With `BRIDGE_OBSERVER=1` the bridge makes the node an MQTT observer ("option 2" on
+[meshwiki.nl/wiki/Observer](https://meshwiki.nl/wiki/Observer): the node has no WiFi, the host
+publishes). It needs SparkNode1.3: the bridge asks the node for its raw RX feed (HostLink
+LOG_RX_DATA) at every connect, and publishes each packet as JSON in the format of
+[meshcoretomqtt](https://github.com/Cisien/meshcoretomqtt) and
+[meshcore-packet-capture](https://github.com/agessaman/meshcore-packet-capture):
+
+- `meshcore/<IATA>/<NODE PUBKEY>/packets`: `origin`, `origin_id`, `timestamp`, `type` PACKET,
+  `direction` rx, `time`, `date`, `len`, `packet_type`, `route` (F/D/T), `payload_len`, `raw`
+  (upper-case hex of the packet as received), `SNR`, `RSSI`, `hash` (as `Packet::calculatePacketHash`),
+  `path` for direct packets. Not retained, QoS 0.
+- `meshcore/<IATA>/<NODE PUBKEY>/status`: `{"status": "online", ...}` with model, firmware,
+  radio and the last health sample; retained, refreshed every 5 minutes, `offline` as the
+  last will and on a clean stop.
+
+**Login.** The DutchMeshCore collectors (`collector1.dutchmeshcore.nl`, `collector2.dutchmeshcore.nl`,
+port 443, MQTT over TLS websockets) and Let's Mesh use token login: user name `v1_<NODE PUBKEY>`,
+password a JWT signed with Ed25519 by the node's identity (`aud` = the broker host, valid 60
+minutes, renewed by reconnecting). The bridge asks the node to sign it over HostLink (SIGN_*); the
+node only signs JWT signing inputs and its private key never leaves it. There is no account, no
+registration and no password: the node key is the credential. Optional: `BRIDGE_OBSERVER_OWNER`
+(your companion's public key) and `BRIDGE_OBSERVER_EMAIL` link the observer to you. The node clock
+must be right (the bridge sets it at every connect). Brokers with a user name and password (URL
+form) take the password from the environment variable named by `BRIDGE_OBSERVER_PASSWORD_ENV`.
+
+| Key | Meaning |
+|---|---|
+| `BRIDGE_OBSERVER` | 1 = on |
+| `BRIDGE_OBSERVER_BROKERS` | `dutchmeshcore` (both collectors), `dutchmeshcore-1`, `dutchmeshcore-2`, `letsmesh-eu`, `letsmesh-us`, or URLs `mqtts://host:8883`, `wss://host/path`, comma separated |
+| `BRIDGE_OBSERVER_IATA` | region code in the topic (required), e.g. `AMS` |
+| `BRIDGE_OBSERVER_NAME` | `origin` name (default: the node name) |
+| `BRIDGE_OBSERVER_OWNER`, `_EMAIL` | optional token claims |
+| `BRIDGE_OBSERVER_AUTH`, `_USERNAME`, `_PASSWORD_ENV` | URL brokers: token, password (user name + variable name) or none |
+| `BRIDGE_OBSERVER_WS_PATH` | websocket path (default `/`, as meshcoretomqtt; some docs give `/mqtt`) |
+| `BRIDGE_OBSERVER_TLS_VERIFY`, `_TOKEN_MINUTES`, `_QUEUE` | TLS check, token lifetime, packets kept per broker while it is down |
+
+Legacy `config.toml`: an `[observer]` section with the same names in lower case without the
+prefix (`enabled = true`, `brokers = ["dutchmeshcore"]`, `iata = "AMS"`, ...).
+
+Each broker has its own bounded queue (oldest packets dropped) and reconnects with backoff
+(2 s doubling to 5 minutes). The node drops feed frames rather than delay its radio when the link
+is busy (`get spark` shows `rxlog:<sent>/<dropped>`). `/spark status` shows the observer: per
+broker connected or retrying, packets sent and dropped, and the last error.
 
 ## Updating the node over Bluetooth (`spark-bridge update`)
 
