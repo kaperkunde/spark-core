@@ -1,8 +1,8 @@
-"""`spark-bridge update <zip>`: update a SparkNode over Bluetooth.
+"""`spark-bridge update <zip>`: update a SpArkNode over Bluetooth.
 
 1. Check the package offline (dfu.load_package).
 2. Take the link lock; a running bridge daemon is asked to pause (SIGUSR1) and hands it over.
-3. Preflight over the normal link (BLE, or USB serial): firmware with `dfu` (SparkNode1.1+),
+3. Preflight over the normal link (BLE, or USB serial): firmware with `dfu` (SpArkNode1.1+),
    running build, battery.
 4. Send `dfu`: the node answers with the bootloader's address (its own + 1), closes the link and
    resets into the bootloader, unbonded. The bridge's own BLE client is disconnected explicitly.
@@ -44,7 +44,7 @@ BUILD_RE = re.compile(r">\s*(v\S+)\s+(\S+)")
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(
         prog="spark-bridge update",
-        description="Update a SparkNode (SparkNode1.1 or later) over Bluetooth with a DFU package "
+        description="Update a SpArkNode (SpArkNode1.1 or later) over Bluetooth with a DFU package "
                     "(pio run -e SparkNode_P1 -t dfu_zip -> .pio/build/SparkNode_P1/firmware-dfu.zip).")
     ap.add_argument("zip", help="application DFU package (.zip)")
     ap.add_argument("--env", "-e", default=None, help="the .env file (default as for the bridge)")
@@ -259,7 +259,7 @@ async def _run_locked(args, cfg, pkg: dfu.Package) -> int:
         try:
             running = await read_build(link)
             if running is None:
-                say(f"The node ({link.version}) has no 'get build'/'dfu' (SparkNode1 or older). "
+                say(f"The node ({link.version}) has no 'get build'/'dfu' (SpArkNode1 or older). "
                     "Update it once over USB (setup.sh), then use this command.")
                 return EXIT_FAILED
             mv = await link.battery()
@@ -313,7 +313,7 @@ async def _run_locked(args, cfg, pkg: dfu.Package) -> int:
         say(f"Update failed: {exc}")
         if exc.app_erased:
             say("The node has NO application now. It is in its bootloader.")
-            say("- Spark bootloader (0.11.0-spark1): it keeps waiting for BLE OTA. Retry with "
+            say("- SpArk bootloader (0.11.0-spark1): it keeps waiting for BLE OTA. Retry with "
                 f"'spark-bridge update --in-bootloader {args.zip}', or with a phone (nRF Connect / nRF DFU app).")
             say("- Stock bootloader: do not reset or power-cycle it if you can avoid it; recovery is USB "
                 "(double reset, copy the UF2). See spark/README.md, 'Recovery'.")
@@ -330,7 +330,7 @@ async def _run_locked(args, cfg, pkg: dfu.Package) -> int:
 
 
 async def scan(seconds: float) -> list[tuple[str, str, str, int]]:
-    """Passive scan: every SparkNode-related advertiser as (kind, address, name, rssi), where kind
+    """Passive scan: every SpArkNode-related advertiser as (kind, address, name, rssi), where kind
     is "app" (Nordic UART service) or "bootloader" (DFU service). Read-only."""
     from bleak import BleakScanner
 
@@ -351,7 +351,7 @@ async def scan(seconds: float) -> list[tuple[str, str, str, int]]:
 
 def scan_main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(prog="spark-bridge scan",
-                                 description="Passive BLE scan: SparkNode app (NUS) and DFU bootloader advertisers. "
+                                 description="Passive BLE scan: SpArkNode app (NUS) and DFU bootloader advertisers. "
                                              "A node connected to a host does not advertise.")
     ap.add_argument("--seconds", type=float, default=15.0)
     args = ap.parse_args(argv)
@@ -371,5 +371,5 @@ def main(argv: list[str] | None = None) -> int:
         return asyncio.run(run(args))
     except KeyboardInterrupt:
         say("Interrupted. If the transfer had started, the node has no application and waits in its "
-            "bootloader: run again with --in-bootloader (Spark bootloader), see spark/README.md 'Recovery'.")
+            "bootloader: run again with --in-bootloader (SpArk bootloader), see spark/README.md 'Recovery'.")
         return EXIT_FAILED

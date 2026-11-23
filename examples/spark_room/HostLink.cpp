@@ -29,9 +29,9 @@ static_assert(sizeof(FIRMWARE_VERSION) - 1 <= 20, "FIRMWARE_VERSION must fit the
 static const char SPARK_BUILD_TAG[] = "SPARK-BUILD " FIRMWARE_VERSION " " SPARK_BUILD_ID;
 
 // Patch releases (design, unused so far): FIRMWARE_VERSION must stay <= 20 bytes and
-// "v1.18.0-SparkNode1.3" already is 20, so a fix release keeps that label and sets
+// "v1.18.0-SpArkNode1.3" already is 20, so a fix release keeps that label and sets
 // -D SPARK_RELEASE_PATCH=1 in variants/spark_p1/platformio.ini. `get spark` and `ver` then show
-// "v1.18.0-SparkNode1.3 (patch 1)", i.e. SparkNode1.3.1; the SPARK-BUILD id (git8-timestamp) tells builds apart anyway.
+// "v1.18.0-SpArkNode1.3 (patch 1)", i.e. SpArkNode1.3.1; the SPARK-BUILD id (git8-timestamp) tells builds apart anyway.
 // A patch release never changes the HostLink contract (that needs a minor version).
 #define SPARK_STR2(x) #x
 #define SPARK_STR(x) SPARK_STR2(x)
@@ -93,7 +93,7 @@ private:
   char _cmd[hl::MAX_CHAN_TEXT + 1];
   char _reply[200];
 
-  // SparkNode1.3 per-session features (CMD_SPARK_HOST_FEATURES), per transport. Cleared by
+  // SpArkNode1.3 per-session features (CMD_SPARK_HOST_FEATURES), per transport. Cleared by
   // APP_START and whenever the transport is not connected, so a plain host never gets them.
   uint8_t _features[NUM_TR] = { 0, 0 };
   uint32_t _rxlog_sent = 0, _rxlog_dropped = 0;
@@ -476,7 +476,7 @@ void HostLink::cmdSendChannel(int t, const uint8_t* f, size_t len) {
   ok(t);
 }
 
-// ---- SparkNode1.3: host features, raw RX feed, signing ----
+// ---- SpArkNode1.3: host features, raw RX feed, signing ----
 
 void HostLink::cmdHostFeatures(int t, const uint8_t* f, size_t len) {
   uint32_t bits = 0;
@@ -703,7 +703,7 @@ bool HostLink::savePrefs() {
   return ok;
 }
 
-// Spark CLI commands. sender_timestamp == 0 means the USB text CLI; LoRa admin and
+// SpArk CLI commands. sender_timestamp == 0 means the USB text CLI; LoRa admin and
 // HostLink both pass a non-zero timestamp.
 bool HostLink::command(uint32_t ts, const char* cmd, char* reply) {
   if (!_m) return false;

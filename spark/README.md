@@ -1,17 +1,17 @@
-# Spark guide
+# SpArk guide
 
-Spark is a set of three parts built on [MeshCore](https://github.com/meshcore-dev/MeshCore) v1.18.
+SpArk is a set of three parts built on [MeshCore](https://github.com/meshcore-dev/MeshCore) v1.18.
 It turns one solar roof node into a hub for your household and your neighbourhood.
 
 | Part | Version | What it is |
 |---|---|---|
-| **SparkNode** | SparkNode1.3 (`v1.18.0-SparkNode1.3`) | Firmware for a SenseCAP Solar Node P1 on your roof: a MeshCore **room** with store-and-forward for your own people, and a **relay** that strengthens the local mesh. |
-| **Spark Bridge** | SparkBridge1.3 (`spark-bridge 1.3`) | A small Python service on a Raspberry Pi or computer near the node. It links the node to **Discord**, one-way or two-way, with MeshCore Public and with the SparkNode room, and can make the node an **MQTT observer** for MC-Radar / Let's Mesh. |
-| **SparkKids** | SparkKids1 | Firmware for a **LilyGO T-Deck Plus**: a simple touch messenger with location sharing for kids, or anyone who doesn't like fancy tech. A "dumb phone" without a service plan. |
+| **SpArkNode** | SpArkNode1.3 (`v1.18.0-SpArkNode1.3`) | Firmware for a SenseCAP Solar Node P1 on your roof: a MeshCore **room** with store-and-forward for your own people, and a **relay** that strengthens the local mesh. |
+| **SpArk Room Bridge** | SpArkBridge1.3 (`spark-bridge 1.3`) | A small Python service on a Raspberry Pi or computer near the node. It links the node to **Discord**, one-way or two-way, with MeshCore Public and with the SpArkNode room, and can make the node an **MQTT observer** for MC-Radar / Let's Mesh. |
+| **SpArkKids** | SpArkKids1 | Firmware for a **LilyGO T-Deck Plus**: a simple touch messenger with location sharing for kids, or anyone who doesn't like fancy tech. A "dumb phone" without a service plan. |
 
 ```
- T-Deck Plus (SparkKids) ─┐
- phones (MeshCore app) ───┼─ LoRa ─ SparkNode (roof) ─ BLE ─ Spark Bridge (Pi/Mac) ─ Internet ─ Discord
+ T-Deck Plus (SpArkKids) ─┐
+ phones (MeshCore app) ───┼─ LoRa ─ SpArkNode (roof) ─ BLE ─ SpArk Room Bridge (Pi/Mac) ─ Internet ─ Discord
  other MeshCore nodes ────┘            room + relay
 ```
 
@@ -19,9 +19,9 @@ The node keeps working on its own. When the bridge, Bluetooth or the internet is
 still stores and forwards messages and the relay keeps relaying. Only the Discord link pauses.
 
 Contents: [What you need](#what-you-need) · [Install with setup.sh](#install-with-setupsh) ·
-[Configuration (.env)](#configuration-env) · [SparkNode](#sparknode) · [Update over Bluetooth](#update-over-bluetooth) ·
-[Spark Bridge](#spark-bridge) ·
-[SparkKids](#sparkkids) · [Building by hand](#building-by-hand) · [For developers](#for-developers)
+[Configuration (.env)](#configuration-env) · [SpArkNode](#sparknode) · [Update over Bluetooth](#update-over-bluetooth) ·
+[SpArk Room Bridge](#spark-bridge) ·
+[SpArkKids](#sparkkids) · [Building by hand](#building-by-hand) · [For developers](#for-developers)
 
 ## What you need
 
@@ -29,12 +29,12 @@ Contents: [What you need](#what-you-need) · [Install with setup.sh](#install-wi
   from Seeed Studio (solar panel; batteries and GPS sold separately), or the
   [SenseCAP Solar Node P1-Pro](https://www.seeedstudio.com/SenseCAP-Solar-Node-P1-Pro-for-Meshtastic-LoRa-p-6412.html)
   with batteries and GPS included. Seeed sells them "for Meshtastic", but they run MeshCore too.
-  Other MeshCore-capable boards can work as well: SparkNode is the standard MeshCore room
+  Other MeshCore-capable boards can work as well: SpArkNode is the standard MeshCore room
   server plus a few build flags, so another board needs its own PlatformIO env modelled on
   `variants/spark_p1/platformio.ini`. Only the P1 is tested.
 - **A bridge host** within Bluetooth range of the node (or connected to it by USB): a Raspberry
   Pi with Raspberry Pi OS (Bookworm), or a Mac. Only needed for Discord.
-- **For SparkKids:** a [LilyGO T-Deck Plus](https://www.lilygo.cc/products/t-deck-plus) per person.
+- **For SpArkKids:** a [LilyGO T-Deck Plus](https://www.lilygo.cc/products/t-deck-plus) per person.
 - A computer with USB to build and flash (macOS or Raspberry Pi OS). `setup.sh` installs
   PlatformIO and esptool when they are missing.
 
@@ -55,14 +55,14 @@ cd spark-core
    **custom** are offered too. The time zone defaults to your system's. Passwords and PINs you
    leave empty are generated and shown once.
 2. **Builds** the chosen firmware with PlatformIO (installed into `~/.platformio` if missing).
-3. **Flashes SparkNode:** you double-press the node's reset button, a UF2 drive (`XIAO-BOOT`)
+3. **Flashes SpArkNode:** you double-press the node's reset button, a UF2 drive (`XIAO-BOOT`)
    appears, and setup.sh copies the firmware to it. It can then read the node's public key over
-   USB, which SparkKids needs.
-4. **Flashes SparkKids:** you put the T-Deck in download mode (off, hold the trackball, on).
+   USB, which SpArkKids needs.
+4. **Flashes SpArkKids:** you put the T-Deck in download mode (off, hold the trackball, on).
    Before the first flash it offers a full 16 MB backup of the device, read twice and compared
    by SHA-256, into `backups/`. It then writes the factory image (first time) or the app
    (updates) with esptool `--after watchdog-reset`. It never erases the device.
-5. **Installs Spark Bridge:** a Python venv in `host/.venv` and a service: systemd on the Pi,
+5. **Installs SpArk Room Bridge:** a Python venv in `host/.venv` and a service: systemd on the Pi,
    a launchd agent on the Mac.
 
 Options: `--dry-run` (writes `.env.dry-run`, prints commands instead of running them),
@@ -91,14 +91,14 @@ documents every key.
 | `BRIDGE_HEALTH_*`, `BRIDGE_DB_PATH`, `BRIDGE_ALLOW_DANGEROUS_CLI`, link supervision keys | bridge | health report, state, safety |
 
 Firmware reads `.env` at build time (`spark/pio_env.py`), so rebuild and reflash after a change.
-For SparkNode the name, passwords, radio, scope and path hash are the **defaults for a new
+For SpArkNode the name, passwords, radio, scope and path hash are the **defaults for a new
 node**: a node that already has saved settings keeps them across a reflash. Change those on the
 node itself (USB console, the MeshCore app's admin login, or `/spark cli` from Discord), for
 example `set name`, `password`, `set guest.password`, `set radio`, the `region` commands.
 
-## SparkNode
+## SpArkNode
 
-SparkNode is the stock MeshCore room server with these additions, each behind a build flag
+SpArkNode is the stock MeshCore room server with these additions, each behind a build flag
 (all on in the `SparkNode_P1` env):
 
 | Flag | Feature |
@@ -107,11 +107,11 @@ SparkNode is the stock MeshCore room server with these additions, each behind a 
 | `HOSTLINK_BLE` | BLE transport (Nordic UART, passkey pairing) |
 | `ROOM_PERSIST_POSTS` | room posts kept in their own flash region across reboots; clock floor after reboot |
 | `ROOM_ALLOW_REPEAT_TOGGLE` | `set repeat on` works again, so the room is also a relay |
-| `ROOM_MEMBER_DIR` | member directory (names, parents) and SparkKids locations (`members`, `where`) |
+| `ROOM_MEMBER_DIR` | member directory (names, parents) and SpArkKids locations (`members`, `where`) |
 
 With none of the flags the room server builds as stock. The protocol is in [HOSTLINK.md](HOSTLINK.md).
 
-**Relay.** Turn relaying on once on the node: `set repeat on`. From SparkNode1.2 the relay applies
+**Relay.** Turn relaying on once on the node: `set repeat on`. From SpArkNode1.2 the relay applies
 the same filters as a MeshCore repeater: a flood whose region is denied (`region denyf ...`; with
 `region denyf *` un-scoped floods are not relayed) and, with `set loop.detect minimal|moderate|strict`,
 a flood that already passed this node too often are not forwarded. Every flood scope the relay should
@@ -141,27 +141,27 @@ in a frame and never stored by the bridge.
 **Parents' commands** (USB, LoRa admin login, or `/spark cli`): `members`, `member del <prefix|name>`,
 `member name <prefix> <name>`, `where`, `where <name>`.
 
-**Version.** `ver` prints `v1.18.0-SparkNode1.3 (Build: <date>) <build id>`; `get build` prints the version and build id.
-The version field is limited to 20 bytes, so a bug-fix release keeps the label `v1.18.0-SparkNode1.3`
+**Version.** `ver` prints `v1.18.0-SpArkNode1.3 (Build: <date>) <build id>`; `get build` prints the version and build id.
+The version field is limited to 20 bytes, so a bug-fix release keeps the label `v1.18.0-SpArkNode1.3`
 and is built with `-D SPARK_RELEASE_PATCH=1` (shown as `(patch 1)` by `ver` and `get spark`, i.e.
-SparkNode1.3.1); the build id already tells builds apart. Contract changes get a new minor version.
+SpArkNode1.3.1); the build id already tells builds apart. Contract changes get a new minor version.
 
-**Observer feed (SparkNode1.3).** The node can hand every packet it receives to the bridge (HostLink
+**Observer feed (SpArkNode1.3).** The node can hand every packet it receives to the bridge (HostLink
 LOG_RX_DATA, off unless the bridge asks for it per session), and signs the bridge's MQTT login token
 with its own key, so the station can be a [DutchMeshCore / MC-Radar observer](https://meshwiki.nl/wiki/Observer)
 without WiFi and without exporting its key. `get spark` shows `rxlog:<sent>/<dropped>`.
 
 ## Update over Bluetooth
 
-From SparkNode1.1 on, the roof node can be updated over Bluetooth from the bridge host. The
-first SparkNode1.1 goes on over USB (SparkNode1 has no `dfu` command).
+From SpArkNode1.1 on, the roof node can be updated over Bluetooth from the bridge host. The
+first SpArkNode1.1 goes on over USB (SpArkNode1 has no `dfu` command).
 
 ```sh
 pio run -e SparkNode_P1 -t dfu_zip                       # .pio/build/SparkNode_P1/firmware-dfu.zip
 host/.venv/bin/spark-bridge update .pio/build/SparkNode_P1/firmware-dfu.zip
 ```
 
-or `./setup.sh` and answer `ble` to "Install SparkNode". `spark-bridge update` pauses a running
+or `./setup.sh` and answer `ble` to "Install SpArkNode". `spark-bridge update` pauses a running
 bridge, checks the package, the node's build and its battery (at least 3.7 V), sends `dfu`,
 transfers to the bootloader, checks the new build id and lets the bridge reconnect. Details and
 exit codes: [host/README.md](../host/README.md#updating-the-node-over-bluetooth-spark-bridge-update).
@@ -174,10 +174,10 @@ bond hand-over data and resets into the bootloader's Bluetooth mode. Without a b
 bootloader advertises openly as `AdaDFU` at the node's address + 1 (last byte), so macOS and
 BlueZ see a new, unbonded device and no stale GATT cache gets in the way. Until the update is
 done, anyone in Bluetooth range could send it firmware; the window is the few minutes of the
-update. SparkNode1.1 also sends a Service Changed indication on the first secured connection after
+update. SpArkNode1.1 also sends a Service Changed indication on the first secured connection after
 each boot, so bonded hosts re-read the GATT table after an update.
 
-**Node commands.** `dfu [force]`, `get build` (`> v1.18.0-SparkNode1.3 <git hash>[+]-<UTC time>`;
+**Node commands.** `dfu [force]`, `get build` (`> v1.18.0-SpArkNode1.3 <git hash>[+]-<UTC time>`;
 `+` = built from uncommitted changes), `ver` (with the build id), `posts reset` (USB only:
 erase all stored room posts).
 
@@ -228,37 +228,37 @@ image on the desk before sending it to the roof.
 | Situation | What to do |
 |---|---|
 | `spark-bridge update` exit 1 (before Start) | The old app is intact. If the node is still in the bootloader (`spark-bridge scan`), press reset or run the update again. |
-| exit 4, Spark bootloader | The node waits for Bluetooth (also after a power cycle): `spark-bridge update --in-bootloader <zip>`, or nRF Connect / nRF DFU app on a phone with the zip. |
+| exit 4, SpArk bootloader | The node waits for Bluetooth (also after a power cycle): `spark-bridge update --in-bootloader <zip>`, or nRF Connect / nRF DFU app on a phone with the zip. |
 | exit 4, stock bootloader | The bootloader session cannot take a new Start; a reset gives USB mode. Recovery is USB: double-press reset, copy the UF2. |
-| Node in USB mode (XIAO-BOOT) | Copy `firmware.uf2` (SparkNode1.1, or the previous release) to the drive. |
+| Node in USB mode (XIAO-BOOT) | Copy `firmware.uf2` (SpArkNode1.1, or the previous release) to the drive. |
 | Nothing works (no drive, no advertising) | SWD: write the bootloader hex, then the app UF2 over USB. |
 
 Keep the UF2 of the running release and its DFU zip on the bridge host before every update.
 The full bench test is [OTA-TESTS.md](OTA-TESTS.md) (`spark/tools/ota_hwtest.sh`).
 
-## Spark Bridge
+## SpArk Room Bridge
 
 See [host/README.md](../host/README.md) for the Discord setup, the per-channel `/spark` commands
 and testing without hardware. In short: create a dedicated Discord bot, put its token and your
 server id in `.env`, pair the node once over Bluetooth, start the service, then in a channel run
 `/spark receive both` (read-only mirror) or `/spark send room` (two-way with the room).
 Discord users post to the mesh under an alias (`/spark alias set`) or their display name; on
-Public a SparkNode1.2 node sends it as the sender name (`BadPirate: Hallo`). Enabling
+Public a SpArkNode1.2 node sends it as the sender name (`BadPirate: Hallo`). Enabling
 `/spark send public` (or `both`) asks for a confirmation after a warning: anyone in that Discord
 channel can then send to Public as your station. Public messages carry a small footer with hops,
-SNR and (SparkNode1.3) the route through named repeaters (`/spark footer on|off`).
+SNR and (SpArkNode1.3) the route through named repeaters (`/spark footer on|off`).
 
 **MQTT observer.** With `BRIDGE_OBSERVER=1`, a region code (`BRIDGE_OBSERVER_IATA=AMS`) and the
 `dutchmeshcore` broker preset, the bridge publishes every packet the node hears to the DutchMeshCore
 collectors that feed MC-Radar (or Let's Mesh). No account is needed: the node signs the login
 token with its own key. `./setup.sh` asks for it; details in [host/README.md](../host/README.md).
 
-## SparkKids
+## SpArkKids
 
 A one-room messenger for the LilyGO T-Deck Plus, made for children and anyone who wants
 something simple: big touch targets, no menus to get lost in, no phone plan.
 
-- **Room:** the home screen is your SparkNode room. Everyone in your tribe reads and writes here;
+- **Room:** the home screen is your SpArkNode room. Everyone in your tribe reads and writes here;
   the node stores messages while a device is off and pushes them when it is back.
 - **People:** the room's members (parents first). Tap a person for a private message (DM).
 - **Public (optional, off by default):** a "Public" row under the room in People opens MeshCore
@@ -296,14 +296,14 @@ cp .env.example .env                                   # and fill it in, or run 
 pio run -e SparkNode_P1 -t create_uf2 -t dfu_zip      # .pio/build/SparkNode_P1/firmware.uf2 and firmware-dfu.zip
 spark/bootloader/build.sh                              # OTA-safe bootloader update UF2 (see above)
 pio run -e SparkKids_TDeckPlus -t mergebin             # firmware-merged.bin (0x0) and firmware.bin (0x10000)
-pio test -e native_spark                               # Spark unit tests
+pio test -e native_spark                               # SpArk unit tests
 pio test -e native                                     # upstream unit tests
 cd host && python3 -m venv .venv && .venv/bin/pip install -e '.[test]' && .venv/bin/pytest
 ```
 
 `SPARK_ENV_FILE=/path/to/file` builds with another file than `.env`.
 
-Flashing by hand: SparkNode: double-press reset, copy `firmware.uf2` to the UF2 drive. SparkKids
+Flashing by hand: SpArkNode: double-press reset, copy `firmware.uf2` to the UF2 drive. SpArkKids
 (download mode): `esptool --chip esp32s3 -p <port> -b 921600 --after watchdog-reset write-flash 0x0 firmware-merged.bin`
 the first time, `write-flash 0x10000 firmware.bin` for updates. `--after watchdog-reset` matters:
 with the default reset the ESP32-S3 stays in its ROM bootloader.
@@ -312,7 +312,7 @@ with the default reset the ESP32-S3 stays in its ROM bootloader.
 
 - [HOSTLINK.md](HOSTLINK.md): the node to bridge protocol.
 - [UPSTREAM.md](UPSTREAM.md): how this fork tracks MeshCore, the hooks in upstream files, versions.
-- Code: `examples/spark_room/` (node additions), `examples/spark_kids/` (SparkKids),
+- Code: `examples/spark_room/` (node additions), `examples/spark_kids/` (SpArkKids),
   `variants/spark_p1/`, `variants/spark_tdeck/`, `host/` (bridge), `spark/pio_env.py` (.env to
   build flags), `spark/tools/`, `spark/bootloader/`, `setup.sh`.
 - [OTA-TESTS.md](OTA-TESTS.md): bench and field tests for Bluetooth updates.

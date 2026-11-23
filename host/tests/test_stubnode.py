@@ -112,7 +112,7 @@ async def test_handshake_frames(stub, cl):
     si = await cl.call(b"\x01\x03      test")
     assert si[0] == 5 and si[4:36] == OWN_PUBKEY and si.endswith(b"SparkNode")
     di = await cl.call(b"\x16\x03")
-    assert len(di) == 82 and di[0] == 0x0D and b"SparkNode1" in di
+    assert len(di) == 82 and di[0] == 0x0D and b"SpArkNode1.3" in di
     assert (await cl.call(b"\x05"))[0] == 9
     assert await cl.call(b"\x06" + struct.pack("<I", T0 - 5)) == b"\x01\x06"
     assert await cl.call(b"\x06" + struct.pack("<I", T0 + 5)) == b"\x00"

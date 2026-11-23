@@ -1,5 +1,5 @@
-# Spark: PlatformIO pre-script. Reads the repository's .env and turns it into build flags for the
-# SparkNode and SparkKids firmware. Used by variants/spark_p1 and variants/spark_tdeck through
+# SpArk: PlatformIO pre-script. Reads the repository's .env and turns it into build flags for the
+# SpArkNode and SpArkKids firmware. Used by variants/spark_p1 and variants/spark_tdeck through
 #   extra_scripts = pre:spark/pio_env.py
 #   custom_spark_component = node | kids
 #
@@ -18,7 +18,7 @@ ROOT = env.subst("$PROJECT_DIR")  # noqa: F821
 
 
 def fail(msg):
-    sys.stderr.write("\n*** Spark .env: %s\n\n" % msg)
+    sys.stderr.write("\n*** SpArk .env: %s\n\n" % msg)
     env.Exit(1)  # noqa: F821
 
 
@@ -83,7 +83,7 @@ def text(key, default=None, required=False, maxlen=31):
 flags = {}      # macro -> value as it appears after -D NAME=
 strings = {}    # macro -> plain string (quoted below)
 
-# radio (SparkNode and SparkKids must match)
+# radio (SpArkNode and SpArkKids must match)
 flags["LORA_FREQ"] = num("SPARK_LORA_FREQ", "869.618", float, 137, 1020)
 flags["LORA_BW"] = num("SPARK_LORA_BW", "62.5", float, 7, 500)
 flags["LORA_SF"] = num("SPARK_LORA_SF", "7", int, 5, 12)
@@ -114,7 +114,7 @@ if component == "node":
 if component == "kids":
     key = get("KIDS_ROOM_KEY", required=True).replace(" ", "")
     if not re.match(r"^[0-9A-Fa-f]{64}$", key):
-        fail("KIDS_ROOM_KEY must be the SparkNode's public key: 64 hex digits "
+        fail("KIDS_ROOM_KEY must be the SpArkNode's public key: 64 hex digits "
              "(node USB console: get public.key)")
     strings["KIDS_ROOM_KEY"] = key.upper()
     strings["KIDS_ROOM_NAME"] = text("KIDS_ROOM_NAME", get("SPARK_NODE_NAME", "SparkNode"), maxlen=15)
@@ -153,10 +153,10 @@ def strip(flag):
 
 env.Replace(BUILD_FLAGS=[f for f in (strip(x) for x in env.get("BUILD_FLAGS", [])) if f])  # noqa: F821
 env.Append(BUILD_FLAGS=["-D %s=%s" % (k, v) for k, v in sorted(flags.items())])  # noqa: F821
-print("Spark: %s firmware configured from %s" % (component, os.path.relpath(env_file, ROOT)))
+print("SpArk: %s firmware configured from %s" % (component, os.path.relpath(env_file, ROOT)))
 
 
-# ---- SparkNode build id -------------------------------------------------------------------------
+# ---- SpArkNode build id -------------------------------------------------------------------------
 # "<git hash>[+]-<UTC yymmddHHMMSS>" in a generated header, so only HostLink.cpp recompiles. The id
 # is kept while the source (git commit + uncommitted changes) and the configuration stay the
 # same, so the separate `pio run` invocations of one build (firmware, UF2, DFU zip) agree, and
@@ -213,7 +213,7 @@ if component == "node":
         with open(header, "w", encoding="utf-8") as f:
             f.write(text)
     env.Append(CPPPATH=[gen_dir])  # noqa: F821
-    print("Spark: build id %s" % bid)
+    print("SpArk: build id %s" % bid)
 
     # `pio run -e <env> -t dfu_zip` -> firmware-dfu.zip next to firmware.hex: the application
     # package for BLE OTA (spark-bridge update, or a phone with nRF Connect / nRF DFU).

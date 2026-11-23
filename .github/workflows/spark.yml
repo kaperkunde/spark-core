@@ -1,6 +1,6 @@
-name: Spark
+name: SpArk
 
-# Spark's existing test suites and its two firmware builds. Upstream MeshCore's own workflows
+# SpArk's existing test suites and its two firmware builds. Upstream MeshCore's own workflows
 # (run-unit-tests.yml, pr-build-check.yml, ...) are unchanged and keep running as before.
 
 on:
@@ -20,11 +20,11 @@ jobs:
       - name: Setup Build Environment
         uses: ./.github/actions/setup-build-environment
 
-      - name: Run Spark unit tests
+      - name: Run SpArk unit tests
         run: pio test -e native_spark -vv
 
   bridge:
-    name: Spark Bridge pytest
+    name: SpArk Room Bridge pytest
     runs-on: ubuntu-latest
     steps:
       - name: Clone Repo
@@ -71,7 +71,7 @@ jobs:
       - name: Build ${{ matrix.environment }}
         run: pio run -e ${{ matrix.environment }}
 
-      - name: SparkNode DFU package and OTA-safe bootloader
+      - name: SpArkNode DFU package and OTA-safe bootloader
         if: matrix.environment == 'SparkNode_P1'
         run: |
           pio run -e SparkNode_P1 -t dfu_zip

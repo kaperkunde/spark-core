@@ -26,7 +26,7 @@ async def test_end_to_end(stub):
     try:
         await wait_for(lambda: node.connected and bridge.store.get_meta("initialized"))
         assert chat.sent == []
-        # SparkNode1.3: the route comes along; a known repeater is shown by name
+        # SpArkNode1.3: the route comes along; a known repeater is shown by name
         bridge.store.set_name("1112aaaa", "NL-AMS-DAR1", 2)
         stub.inject_channel("Bob", "hello", ts=T0, hops=2, hash_size=2, path=bytes.fromhex("1112c3d4"), snr=5.0)
         await wait_for(lambda: chat.sent)

@@ -1,4 +1,4 @@
-// SparkKids UI: touch first (GT911, polled), keyboard and trackball as fallbacks.
+// SpArkKids UI: touch first (GT911, polled), keyboard and trackball as fallbacks.
 // Screens: Room (home), People (room, optional Public, members), DM, Public, parent PIN/settings.
 
 #include "KidsApp.h"
@@ -1369,7 +1369,7 @@ void KidsMesh::handleSerialCommand(char* cmd) {
   char hex[65];
   if (strcmp(cmd, "info") == 0 || strcmp(cmd, "ver") == 0) {
     kids::toHex(hex, self_id.pub_key, 32);
-    Serial.printf("SparkKids %s\nme %s name '%s'\nlink %d people %d batt %umV clock %lu\n", KIDS_FW_VERSION, hex,
+    Serial.printf("SpArkKids %s\nme %s name '%s'\nlink %d people %d batt %umV clock %lu\n", KIDS_FW_VERSION, hex,
                   _prefs.name, (int)_link, _num_people, _batt_mv, (unsigned long)getRTCClock()->getCurrentTime());
     char diag[128];
     gps.formatDiagnostics(diag, sizeof(diag));

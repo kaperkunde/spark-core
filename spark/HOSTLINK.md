@@ -1,6 +1,6 @@
 # HostLink contract v1
 
-HostLink lets a host computer bridge a SparkNode (the spark-core room server) (BLE or USB) to something
+HostLink lets a host computer bridge a SpArkNode (the spark-core room server) (BLE or USB) to something
 else. The contract below is shared byte-for-byte with the host bridge in `host/`; do not
 change it without changing both sides.
 
@@ -23,7 +23,7 @@ HostLink is a subset of the MeshCore companion frame protocol (as in `examples/c
 | 56 | GET_STATS | u8 type: 0 core, 1 radio, 2 packets | STATS (24): u8 type, then: core = u16 batt mV, u32 uptime secs, u16 err flags, u8 tx queue len. radio = i16 noise floor dBm, i8 last RSSI, i8 last SNR x4, u32 tx airtime secs, u32 rx airtime secs. packets = u32 recv, u32 sent, u32 sent flood, u32 sent direct, u32 recv flood, u32 recv direct, u32 recv errors. Bad type: ERR code 6. |
 | 31 | GET_CHANNEL | u8 idx | CHANNEL_INFO (18): u8 idx, 32-byte NUL-padded name, 16-byte secret. Only idx 0 exists: name `Public`, secret `8b3387e9c5cdea6ac9e5edbaa115cd72`. Other idx: ERR code 2. |
 | 32 | SET_CHANNEL | any | ERR code 1 (not supported in v1) |
-| 3 | SEND_CHANNEL_TXT_MSG | u8 txt_type (must be 0), u8 channel idx (must be 0), u32 timestamp, text, optional: `00` + sender name (SparkNode1.2, see the amendment below) | OK (0). The node transmits `<sender>: <text>` on the channel, cutting the whole string to 160 bytes; `<sender>` is the sanitized sender name if one was given, otherwise the node name. ERR code 1 for txt_type != 0, ERR code 2 for a bad idx, ERR code 3 if no packet could be allocated. |
+| 3 | SEND_CHANNEL_TXT_MSG | u8 txt_type (must be 0), u8 channel idx (must be 0), u32 timestamp, text, optional: `00` + sender name (SpArkNode1.2, see the amendment below) | OK (0). The node transmits `<sender>: <text>` on the channel, cutting the whole string to 160 bytes; `<sender>` is the sanitized sender name if one was given, otherwise the node name. ERR code 1 for txt_type != 0, ERR code 2 for a bad idx, ERR code 3 if no packet could be allocated. |
 | 2 | SEND_TXT_MSG | u8 txt_type, u8 attempt, u32 timestamp, 6-byte destination pubkey prefix, text | If the prefix equals the node's own pubkey prefix and txt_type is 0: the text (cut to 151 bytes) is stored as a room post authored by the room itself and pushed to room clients; reply SENT (6): u8 0, u32 0, u32 0. This post is NOT echoed back to the host. Any other destination: ERR code 2. Other txt_type: ERR code 1. |
 | 66 | RUN_CLI_COMMAND | command text | CLI_REPLY (29): reply text (may be empty). Runs the room server CLI with remote (non-serial) privileges: serial-only commands are refused, and `set ble.pin` is always refused here. |
 | 10 | SYNC_NEXT_MESSAGE | none | Exactly one of: a room post frame (16), a channel message frame (17), or NO_MORE_MESSAGES (10). Stored room posts newer than the replay cursor come first, oldest first (the cursor advances as each is handed out); then queued channel messages, oldest first. |
@@ -36,7 +36,7 @@ Push `0x89` TRACE_DATA (upstream layout): u8 0, u8 path_len (bytes of hashes), u
 **Reply and push layouts**
 - OK: `00`. ERR: `01`, u8 code (1 unsupported, 2 not found, 3 table full, 4 bad state, 6 illegal arg).
 - SELF_INFO: `05`, u8 adv_type = 3 (room), u8 tx power dBm, u8 max tx power, 32-byte pubkey, i32 lat x1e6, i32 lon x1e6, u8 multi_acks, u8 advert loc policy, u8 0, u8 0, u32 freq (MHz x1000), u32 bandwidth (kHz x1000), u8 SF, u8 CR, node name (rest of frame).
-- DEVICE_INFO: `0d`, u8 firmware protocol code = 14, u8 0, u8 max channels = 1, u32 0 (the BLE PIN is never disclosed), 12-byte NUL-padded build date, 40-byte NUL-padded board model, 20-byte NUL-padded version string (e.g. `v1.18.0-SparkNode1.3`, exactly 20 bytes, so no NUL terminator is guaranteed: read it as a fixed field), u8 repeat enabled (0/1), u8 path hash mode. 82 bytes.
+- DEVICE_INFO: `0d`, u8 firmware protocol code = 14, u8 0, u8 max channels = 1, u32 0 (the BLE PIN is never disclosed), 12-byte NUL-padded build date, 40-byte NUL-padded board model, 20-byte NUL-padded version string (e.g. `v1.18.0-SpArkNode1.3`, exactly 20 bytes, so no NUL terminator is guaranteed: read it as a fixed field), u8 repeat enabled (0/1), u8 path hash mode. 82 bytes.
 - Room post (CONTACT_MSG_RECV_V3): `10`, i8 0, `00 00`, 6-byte prefix of the ROOM's own pubkey, u8 `ff`, u8 txt_type = 2, u32 post timestamp (room clock), 4-byte prefix of the AUTHOR's pubkey, text. A post whose author prefix equals the room's own prefix was posted by the room itself (USB/remote CLI `room.post`).
 - Channel message (CHANNEL_MSG_RECV_V3): `11`, i8 SNR x4, `00 00`, u8 channel idx, u8 path_len (`ff` = direct, otherwise top 2 bits hash mode and low 6 bits hop count), u8 txt_type = 0, u32 sender timestamp, text in the form `<sender name>: <message>`.
 - NO_MORE_MESSAGES: `0a`.
@@ -61,7 +61,7 @@ Push `0x89` TRACE_DATA (upstream layout): u8 0, u8 path_len (bytes of hashes), u
 - V7 battery 4012 mV, storage 0/0: `0cac0f0000000000000000`
 - V8 CLI "get repeat": `4267657420726570656174`, reply "> on": `1d3e206f6e`
 - V9 the V8 command on the serial/TCP wire: `3c0b004267657420726570656174`; its reply on the wire: `3e05001d3e206f6e`
-- V10 host->node channel send "Hallo" as sender "BadPirate" (SparkNode1.2): `03000000f1536548616c6c6f00426164506972617465`; on air: `BadPirate: Hallo`
+- V10 host->node channel send "Hallo" as sender "BadPirate" (SpArkNode1.2): `03000000f1536548616c6c6f00426164506972617465`; on air: `BadPirate: Hallo`
 
 ## Amendment: host-originated room posts (firmware rule, no frame change)
 
@@ -73,7 +73,7 @@ reboot. Posts from mesh clients and from the USB or remote `room.post` CLI are d
 before. Limit: the mark is kept for the 32 most recent host posts, which is at least as many
 as the room holds.
 
-## Amendment: sender name for channel sends (SparkNode1.2)
+## Amendment: sender name for channel sends (SpArkNode1.2)
 
 SEND_CHANNEL_TXT_MSG may carry the name to show as the sender on the channel, so a bridge can
 post `BadPirate: Hallo` instead of `<node name>: BadPirate: Hallo`:
@@ -90,8 +90,8 @@ post `BadPirate: Hallo` instead of `<node name>: BadPirate: Hallo`:
   empty, the node name is used as before.
 - The 160-byte on-air limit now counts `<sender>: `; the host budgets with the sanitized name.
 - Backward compatible both ways: a frame without a NUL is the v1 frame. Firmware before
-  SparkNode1.2 stops the text at the NUL, so it sends `<node name>: <text>` and ignores the
-  name; a host should only send the trailer when DEVICE_INFO reports SparkNode1.2 or later
+  SpArkNode1.2 stops the text at the NUL, so it sends `<node name>: <text>` and ignores the
+  name; a host should only send the trailer when DEVICE_INFO reports SpArkNode1.2 or later
   (the bridge falls back to tagging the text itself).
 - Room posts (SEND_TXT_MSG) are unchanged: the room is the author; a host tags the text.
 
@@ -104,7 +104,7 @@ post `BadPirate: Hallo` instead of `<node name>: BadPirate: Hallo`:
 | `set ble on` / `set ble off` | any admin | enable/disable BLE; takes effect at once when BLE is running (kill switch). BLE starts 30 s after boot |
 | `get ble` | any | enabled, running, connected, pin set |
 | `ble unpair` | any admin | clear bonds, disconnect |
-| `get spark` | any | version, store on/off, posts, queued channel messages, active hosts; SparkNode1.3 adds `feat:<usb>/<ble>` (enabled host feature bits per transport, hex) and `rxlog:<sent>/<dropped>` (LOG_RX_DATA frames since boot) |
+| `get spark` | any | version, store on/off, posts, queued channel messages, active hosts; SpArkNode1.3 adds `feat:<usb>/<ble>` (enabled host feature bits per transport, hex) and `rxlog:<sent>/<dropped>` (LOG_RX_DATA frames since boot) |
 | `trace <hex>[,<hex>...]` | any | send a direct TRACE through the listed repeaters (hash prefixes of 1, 2 or 4 bytes, all the same size, up to 6 hops); `OK - trace sent tag=XXXXXXXX`. The result is also printed on USB serial |
 | `trace` | any | last trace: tag, then per hop `<hash> X.XdB` (SNR at which that hop heard the previous sender), then `back X.XdB rssi=N` (the return as this node heard it); or `pending`, `timeout (no reply after 30 s)`, `none` |
 | `get names [start]` | any | advert-name cache (32 entries, newest first): 8 hex pubkey prefix and name; `more: get names N` continues. Use the first 2, 4 or 8 hex digits as a trace hop |
@@ -122,7 +122,7 @@ post `BadPirate: Hallo` instead of `<node name>: BadPirate: Hallo`:
 - A USB frame is `<` + 2 length bytes + payload; frames are only recognised when the CLI
   line buffer is empty. Do not mix text CLI use and frames in the same second.
 
-## Amendment: member directory and locations (SparkNode1, `ROOM_MEMBER_DIR`)
+## Amendment: member directory and locations (SpArkNode1, `ROOM_MEMBER_DIR`)
 
 No HostLink frame changes. The room server keeps a directory of every client that logged in
 with the room or admin password (full pubkey, name, admin flag, last seen, latest GPS fix),
@@ -144,9 +144,9 @@ shows in `get names` and GET_CONTACTS and is pushed as NEW_ADVERT to an active h
 is also seeded with every directory name after boot. The bridge additionally reads `members` at
 link-up and when an unknown author posts (at most every 5 minutes).
 
-## Amendment: observer feed, channel routes and signing (SparkNode1.3)
+## Amendment: observer feed, channel routes and signing (SpArkNode1.3)
 
-Three additions. A host that never sends `CMD_SPARK_HOST_FEATURES` sees exactly the SparkNode1.2
+Three additions. A host that never sends `CMD_SPARK_HOST_FEATURES` sees exactly the SpArkNode1.2
 behaviour: no new pushes, no new reply codes.
 
 **Host features (per session, opt-in)**
@@ -198,16 +198,16 @@ Rule: the node only signs a JWT signing input, `<base64url>.<base64url>` (charac
 host cannot obtain a signature it could replay on the mesh. The `meshcore` library's
 `commands.sign()` works unchanged.
 
-**Golden vectors (SparkNode1.3)**
+**Golden vectors (SpArkNode1.3)**
 - V11 push LOG_RX_DATA, SNR 5.0, RSSI -95, raw `1501aabb`: `8814a11501aabb`
 - V12 reply SPARK_CHANNEL_MSG "Bob: hi", SNR 5.0, RSSI -95, 2 hops of 2 bytes `a1b2`, `c3d4`:
   `c114a100420000f1536504a1b2c3d4426f623a206869`
 - V13 host->node SPARK_HOST_FEATURES RX_LOG|CHANNEL_PATH: `c003000000`, reply `0003000000`
 - V14 SIGN_START reply: `130000020000`
 
-**Version labels.** DEVICE_INFO carries `v1.18.0-SparkNode1.3` (the 20-byte limit). A bug-fix
+**Version labels.** DEVICE_INFO carries `v1.18.0-SpArkNode1.3` (the 20-byte limit). A bug-fix
 release that does not change this contract keeps that label and is marked by
-`-D SPARK_RELEASE_PATCH=<n>` (shown by `ver` and `get spark` as `(patch n)`, i.e. SparkNode1.3.n);
+`-D SPARK_RELEASE_PATCH=<n>` (shown by `ver` and `get spark` as `(patch n)`, i.e. SpArkNode1.3.n);
 the SPARK-BUILD id tells builds apart in any case. Anything that changes the contract is a new
-minor version (SparkNode1.4). A host compares (major, minor) only; the old development label
-`SparkNode2` (no dot) is treated as older than 1.0.
+minor version (SpArkNode1.4). A host compares (major, minor) only; the old development label
+`SpArkNode2` (no dot) is treated as older than 1.0.

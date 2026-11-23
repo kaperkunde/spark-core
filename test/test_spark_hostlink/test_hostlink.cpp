@@ -120,9 +120,9 @@ TEST(Layout, DeviceInfoIs82Bytes) {
 
 TEST(Layout, DeviceInfoKeepsA20ByteVersion) {
   uint8_t out[MAX_FRAME];
-  DeviceInfo d = {"20 Nov 2026", "Seeed SenseCAP Solar P1", "v1.18.0-SparkNode1.3", 1, 0};
+  DeviceInfo d = {"20 Nov 2026", "Seeed SenseCAP Solar P1", "v1.18.0-SpArkNode1.3", 1, 0};
   ASSERT_EQ(82u, buildDeviceInfo(out, d));
-  EXPECT_EQ(0, memcmp(&out[8 + 12 + 40], "v1.18.0-SparkNode1.3", 20));
+  EXPECT_EQ(0, memcmp(&out[8 + 12 + 40], "v1.18.0-SpArkNode1.3", 20));
   EXPECT_EQ(1, out[80]);
 }
 
@@ -150,12 +150,12 @@ TEST(Layout, SelfInfo) {
   SelfInfo s;
   memset(&s, 0, sizeof(s));
   s.adv_type = 3; s.tx_power = 22; s.max_tx_power = 22;
-  s.freq_khz = 915000; s.bw_hz = 250000; s.sf = 10; s.cr = 5; s.name = "Spark";
+  s.freq_khz = 915000; s.bw_hz = 250000; s.sf = 10; s.cr = 5; s.name = "SpArk";
   size_t n = buildSelfInfo(out, s);
   EXPECT_EQ(58u + 5u, n);
   EXPECT_EQ(5, out[0]);
   EXPECT_EQ(3, out[1]);
-  EXPECT_EQ(0, memcmp(&out[n - 5], "Spark", 5));
+  EXPECT_EQ(0, memcmp(&out[n - 5], "SpArk", 5));
   EXPECT_EQ(10, out[n - 5 - 2]);
 }
 
@@ -181,9 +181,9 @@ TEST(Layout, ChannelInfoAndMisc) {
 TEST(Truncate, ChannelTextCutsAt160) {
   std::string long_text(300, 'x');
   char out[MAX_CHAN_TEXT + 1];
-  size_t n = composeChannelText(out, "Spark", long_text.data(), long_text.size());
+  size_t n = composeChannelText(out, "SpArk", long_text.data(), long_text.size());
   EXPECT_EQ(160u, n);
-  EXPECT_EQ(0, strncmp(out, "Spark: xxx", 10));
+  EXPECT_EQ(0, strncmp(out, "SpArk: xxx", 10));
   EXPECT_EQ(0, out[160]);
 }
 
@@ -226,7 +226,7 @@ TEST(Parse, RejectsShortCommands) {
   EXPECT_FALSE(parseTxtSend(f, 8, t));
 }
 
-// ---- channel send with a sender name (SparkNode1.2 trailer) ----
+// ---- channel send with a sender name (SpArkNode1.2 trailer) ----
 
 static std::string sanitize(const std::string& in) {
   char out[MAX_SENDER_NAME + 1];
@@ -643,7 +643,7 @@ TEST(Trace, FormatNames) {
   EXPECT_STREQ("> no names heard yet", b);
 }
 
-// ---- SparkNode1.3: raw RX feed, channel route, host features, signing input ----
+// ---- SpArkNode1.3: raw RX feed, channel route, host features, signing input ----
 
 TEST(Spark13, PathByteCount) {
   EXPECT_EQ(0u, pathByteCount(0xFF));          // direct

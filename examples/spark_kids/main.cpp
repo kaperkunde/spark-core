@@ -1,5 +1,5 @@
-// SparkKids: a one-room MeshCore messenger for the LilyGO T-Deck Plus.
-// Room = your SparkNode (key from .env), People = its member directory (GET_MEMBERS), DMs to members.
+// SpArkKids: a one-room MeshCore messenger for the LilyGO T-Deck Plus.
+// Room = your SpArkNode (key from .env), People = its member directory (GET_MEMBERS), DMs to members.
 
 #include <Arduino.h>
 #include <SPIFFS.h>

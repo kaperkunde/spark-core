@@ -6,7 +6,7 @@ import hashlib
 
 ROOM_POST_MAX = 151  # bytes, including the "[name] " tag
 PUBLIC_MAX = 160  # bytes on air, including the "<sender>: " prefix
-SENDER_MAX = 31  # bytes: MeshCore's 32-byte name field (SparkNode1.2 sender name, HOSTLINK.md)
+SENDER_MAX = 31  # bytes: MeshCore's 32-byte name field (SpArkNode1.2 sender name, HOSTLINK.md)
 
 
 def clean(text: str) -> str:
@@ -32,7 +32,7 @@ def public_budget(node_name: str) -> int:
 
 
 def sanitize_sender(name: str) -> str:
-    """The sender-name rules of SparkNode1.2 (HostLinkCodec sanitizeSenderName): ':' dropped,
+    """The sender-name rules of SpArkNode1.2 (HostLinkCodec sanitizeSenderName): ':' dropped,
     control characters become spaces, spaces collapse, ends trimmed, at most 31 UTF-8 bytes.
     "" means nothing usable is left."""
     s = "".join(" " if ord(c) < 0x20 or ord(c) == 0x7F else c for c in name if c != ":")

@@ -1,6 +1,6 @@
 #pragma once
 
-// Touch gesture recognizer for the SparkKids UI (pure C++, unit tested natively).
+// Touch gesture recognizer for the SpArkKids UI (pure C++, unit tested natively).
 // Feed it one touch sample per poll; it emits taps (on release), vertical scrolls with a
 // coasting fling, and a left swipe (finger moves right to left) that means "back".
 // Thresholds: kids-tdeck-ui-plan.md section 4.3.

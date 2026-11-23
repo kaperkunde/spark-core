@@ -46,7 +46,7 @@ async def test_handshake(stub):
     link = mklink(stub, rec)
     await link.connect()
     try:
-        assert link.node_name == "SparkNode" and link.version == "v1.18.0-SparkNode1.3"
+        assert link.node_name == "SparkNode" and link.version == "v1.18.0-SpArkNode1.3"
         assert link.supports_sender
         assert link.own_prefix == H("a1b2c3d4e5f6") and link.own_author == "a1b2c3d4"
         codes = [f[0] for f in stub.received]
@@ -403,6 +403,11 @@ def test_spark_node_version_and_sender_support():
     assert spark_node_version("v1.18.0-SparkNode2") == (0, 2) < (1, 2)
     assert spark_node_version("v1.18.0-SparkNode2.0") == (2, 0)
     assert spark_node_version("v1.18.0-SparkNodeX") is None
+    # the SpArk spelling (1.3 on) and any case parse the same; the dev label stays old either way
+    assert spark_node_version("v1.18.0-SpArkNode1.3") == (1, 3)
+    assert spark_node_version("v1.18.0-sparknode1.2") == (1, 2)
+    assert spark_node_version("v1.18.0-SpArkNode1.3 (patch 1)") == (1, 3)
+    assert spark_node_version("v1.18.0-SpArkNode2") == (0, 2)
     assert spark_node_version("v1.18.0") is None and spark_node_version("") is None
 
 

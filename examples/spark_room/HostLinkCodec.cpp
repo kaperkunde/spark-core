@@ -464,7 +464,7 @@ size_t formatNames(char* out, size_t cap, const Contact* names, const bool* used
   return at;
 }
 
-// ---- SparkNode1.3 extensions ----
+// ---- SpArkNode1.3 extensions ----
 
 size_t pathByteCount(uint8_t path_len) {
   if (path_len == 0xFF) return 0;

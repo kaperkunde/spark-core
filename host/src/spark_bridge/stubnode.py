@@ -1,7 +1,7 @@
 """Contract-faithful fake HostLink node (TCP, serial-style framing).
 
-Implements HOSTLINK CONTRACT v1 (plus the SparkNode1.2 sender name on channel sends, and the
-SparkNode1.3 host features, LOG_RX_DATA, 0xC1 channel routes and JWT-only signing, when the
+Implements HOSTLINK CONTRACT v1 (plus the SpArkNode1.2 sender name on channel sends, and the
+SpArkNode1.3 host features, LOG_RX_DATA, 0xC1 channel routes and JWT-only signing, when the
 stub's version is new enough): the frame subset, the room-post replay cursor, the
 32-entry channel ring, "no echo of host posts" and the golden vectors. Used by the tests
 and runnable by hand:
@@ -102,7 +102,7 @@ def build_self_info(name: str = "SparkNode", pubkey: bytes = OWN_PUBKEY) -> byte
             + le32(869525) + le32(250000) + bytes([11, 5]) + name.encode())
 
 
-STUB_VERSION = "v1.18.0-SparkNode1.3"
+STUB_VERSION = "v1.18.0-SpArkNode1.3"
 
 
 def build_device_info(version: str = STUB_VERSION, repeat: bool = True) -> bytes:
@@ -137,14 +137,14 @@ class StubNode:
         self.skip: set[int] = set()  # host-originated posts: not echoed until the next APP_START
         # channel ring: (text, ts, snr, rssi, packed path_len, path bytes)
         self.ring: deque[tuple] = deque(maxlen=32)
-        self.features = 0          # SparkNode1.3 host features of the (single) session
+        self.features = 0          # SpArkNode1.3 host features of the (single) session
         self.rx_pushed = 0
         self._sign: bytearray | None = None
         from Crypto.PublicKey import ECC
         self.sign_key = ECC.generate(curve="ed25519")  # signs SIGN_* requests
         self.pubkey = OWN_PUBKEY   # use_sign_key() makes SELF_INFO carry the signing key instead
         self.contacts: list[tuple[bytes, str, int]] = []
-        self.cli_replies = {"get repeat": "> on", "ver": "v1.18.0-SparkNode1"}
+        self.cli_replies = {"get repeat": "> on", "ver": "v1.18.0-SpArkNode1"}
         # test hooks
         self.received: list[bytes] = []
         self.transmitted: list[str] = []  # channel text as sent on air

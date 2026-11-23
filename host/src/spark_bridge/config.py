@@ -52,7 +52,7 @@ class NodeConfig:
 @dataclass
 class DiscordConfig:
     allowed_guild_ids: list[int] = field(default_factory=list)
-    webhook_name: str = "Spark Bridge"
+    webhook_name: str = "SpArk Room Bridge"
 
 
 @dataclass

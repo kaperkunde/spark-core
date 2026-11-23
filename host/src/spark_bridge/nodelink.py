@@ -7,16 +7,16 @@ Lib calls used per contract command (meshcore 2.3.19), no raw frames were needed
   SET_DEVICE_TIME      commands.set_time(epoch)
   GET_BATT_AND_STORAGE commands.get_bat()
   GET_STATS 0/1        commands.get_stats_core() / get_stats_radio()
-  SEND_CHANNEL_TXT_MSG commands.send_chan_msg(0, text, timestamp); SparkNode1.2 sender name:
+  SEND_CHANNEL_TXT_MSG commands.send_chan_msg(0, text, timestamp); SpArkNode1.2 sender name:
                        text + "\0" + sender (the lib encodes the str as is)
   SEND_TXT_MSG (room)  commands.send_msg(<own 6-byte prefix>, text, timestamp)
   RUN_CLI_COMMAND      commands.run_cli_command(cmd)
   SYNC_NEXT_MESSAGE    commands.get_msg()   (reply events used directly, no subscriptions)
   GET_CONTACTS         commands.get_contacts()
   pushes               subscribe(MESSAGES_WAITING | NEW_CONTACT | DISCONNECTED) with sync callbacks
-  SIGN_*               commands.sign(data)  (SparkNode1.3, observer tokens)
+  SIGN_*               commands.sign(data)  (SpArkNode1.3, observer tokens)
 
-SparkNode1.3 frames the library does not know are handled before it (see _install_rx_hook):
+SpArkNode1.3 frames the library does not know are handled before it (see _install_rx_hook):
 SPARK_HOST_FEATURES (0xC0) is sent with commands.send() (its reply is a plain OK + u32), the
 0xC1 channel message with route is turned into the library's CHANNEL_MSG_RECV event, and the
 LOG_RX_DATA push (0x88) goes straight to `rx_log` without the library's packet decoding.
@@ -52,24 +52,25 @@ class LinkGaveUp(Exception):
 
 
 NUS_SERVICE_UUID = "6E400001-B5A3-F393-E0A9-E50E24DCCA9E"  # MeshCore BLE UART service
-SENDER_NAME_VERSION = (1, 2)  # SparkNode1.2: SEND_CHANNEL_TXT_MSG takes a sender name
-FEATURES_VERSION = (1, 3)     # SparkNode1.3: SPARK_HOST_FEATURES, LOG_RX_DATA, 0xC1, SIGN_*
+SENDER_NAME_VERSION = (1, 2)  # SpArkNode1.2: SEND_CHANNEL_TXT_MSG takes a sender name
+FEATURES_VERSION = (1, 3)     # SpArkNode1.3: SPARK_HOST_FEATURES, LOG_RX_DATA, 0xC1, SIGN_*
 CMD_SPARK_HOST_FEATURES = 0xC0
 RESP_SPARK_CHANNEL_MSG = 0xC1
 PUSH_LOG_RX_DATA = 0x88
 FEATURE_RX_LOG = 0x01
 FEATURE_CHANNEL_PATH = 0x02
 # "SparkNode<major>[.<minor>[.<patch>]]" not followed by more digits, dots or letters.
-_SPARK_VER = re.compile(r"SparkNode(\d+)(?:\.(\d+))?(?:\.(\d+))?(?![\w.])")
+# Both spellings, any case: "SparkNode1.2" (labels up to 1.2) and "SpArkNode1.3" (the SpArk brand).
+_SPARK_VER = re.compile(r"SparkNode(\d+)(?:\.(\d+))?(?:\.(\d+))?(?![\w.])", re.IGNORECASE)
 
 
 def spark_node_version(version: str) -> tuple[int, int] | None:
-    """(major, minor) from a DEVICE_INFO version like "v1.18.0-SparkNode1.3"; None if not a SparkNode.
+    """(major, minor) from a DEVICE_INFO version like "v1.18.0-SpArkNode1.3"; None if not a SpArkNode.
 
-    Releases are SparkNode1, SparkNode1.1, 1.2, 1.3 (a patch release keeps the 1.3 label, see
-    HOSTLINK.md). The old development label "SparkNode2" (no dot, major >= 2) predates them and
+    Releases are SpArkNode1, SpArkNode1.1, 1.2, 1.3 (a patch release keeps the 1.3 label, see
+    HOSTLINK.md). The old development label "SpArkNode2" (no dot, major >= 2) predates them and
     has none of their features: it counts as (0, 2). A real major release must carry a minor
-    ("SparkNode2.0")."""
+    ("SpArkNode2.0")."""
     m = _SPARK_VER.search(version or "")
     if not m:
         return None
@@ -96,7 +97,7 @@ class ChannelMsg:
     hops: int | None = None      # None: unknown; 0 with direct=False: heard from the sender itself
     direct: bool = False         # direct-routed (path_len 0xff)
     hash_size: int = 1           # bytes per hop hash
-    path: bytes | None = None    # hop hashes, first repeater first (SparkNode1.3 0xC1); None: not sent
+    path: bytes | None = None    # hop hashes, first repeater first (SpArkNode1.3 0xC1); None: not sent
 
     @property
     def path_complete(self) -> bool:
@@ -191,7 +192,7 @@ class NodeLink:
         self.pause_grace = pause_grace
         self.paused = False
         self._pause = asyncio.Event()
-        # SparkNode1.3: callback for LOG_RX_DATA (set by the observer), and what the node enabled
+        # SpArkNode1.3: callback for LOG_RX_DATA (set by the observer), and what the node enabled
         self.rx_log = None  # callable(RxPacket), sync
         self.features = 0
         self.rx_frames = 0
@@ -204,7 +205,7 @@ class NodeLink:
 
     @property
     def supports_sender(self) -> bool:
-        """The node puts a host-supplied sender name on Public (SparkNode1.2 or later)."""
+        """The node puts a host-supplied sender name on Public (SpArkNode1.2 or later)."""
         v = spark_node_version(self.version)
         return v is not None and v >= SENDER_NAME_VERSION
 
@@ -325,11 +326,11 @@ class NodeLink:
         log.info("connected to %s (%s)", self.node_name, self.version)
 
     def _install_rx_hook(self, mc: MeshCore) -> None:
-        """Handle the SparkNode1.3 frames before the library sees them (it would drop 0xC1 and
+        """Handle the SpArkNode1.3 frames before the library sees them (it would drop 0xC1 and
         decode every 0x88 packet itself)."""
         reader = getattr(mc, "_reader", None)
         if reader is None:
-            log.warning("meshcore library without _reader: SparkNode1.3 frames unavailable")
+            log.warning("meshcore library without _reader: SpArkNode1.3 frames unavailable")
             return
         orig = reader.handle_rx
         dispatcher = mc.dispatcher
@@ -357,7 +358,7 @@ class NodeLink:
         reader.handle_rx = handle_rx
 
     async def _enable_features(self, mc: MeshCore) -> None:
-        """SparkNode1.3: route with every channel message; the raw RX feed only for an observer."""
+        """SpArkNode1.3: route with every channel message; the raw RX feed only for an observer."""
         self.features = 0
         v = self.node_version
         if v is None or v < FEATURES_VERSION:
@@ -449,7 +450,7 @@ class NodeLink:
         return dict((await self._cmd(self._require().commands.get_stats_packets())).payload)
 
     async def send_public(self, text: str, sender: str | None = None) -> None:
-        """Send on Public. With `sender` (already sanitized, SparkNode1.2+) the node sends
+        """Send on Public. With `sender` (already sanitized, SpArkNode1.2+) the node sends
         "<sender>: <text>" instead of "<node name>: <text>"."""
         if sender:
             text = f"{text}\0{sender}"
@@ -464,7 +465,7 @@ class NodeLink:
         return ev.payload.get("text", "")
 
     async def sign(self, data: bytes) -> bytes:
-        """Ed25519 signature by the node's identity (SparkNode1.3 SIGN_*: JWT signing input only)."""
+        """Ed25519 signature by the node's identity (SpArkNode1.3 SIGN_*: JWT signing input only)."""
         mc = self._require()
         try:
             async with self._lock:

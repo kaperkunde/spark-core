@@ -81,7 +81,7 @@ class SignNode:
         from Crypto.PublicKey import ECC
         self.key = ECC.generate(curve="ed25519")
         self.pubkey = self.key.public_key().export_key(format="raw").hex()
-        self.node_name, self.version, self.connected, self.features, self.radio = "WoonSpArk", "v1.18.0-SparkNode1.3", True, 1, "869.618,62.5,7,5"
+        self.node_name, self.version, self.connected, self.features, self.radio = "WoonSpArk", "v1.18.0-SpArkNode1.3", True, 1, "869.618,62.5,7,5"
         self.signed: list[bytes] = []
 
     async def sign(self, data: bytes) -> bytes:
@@ -250,6 +250,6 @@ async def test_does_not_connect_to_an_old_node():
     obs = Observer(ObserverConfig(enabled=True, iata="AMS", brokers=["letsmesh-eu"]), node, client_factory=fb.factory)
     task = asyncio.create_task(obs.run())
     await asyncio.sleep(0.2)
-    assert fb.connects == [] and node.signed == [] and "needs SparkNode1.3" in obs.summary()
+    assert fb.connects == [] and node.signed == [] and "needs SpArkNode1.3" in obs.summary()
     obs.stop()
     await asyncio.wait_for(task, 10)

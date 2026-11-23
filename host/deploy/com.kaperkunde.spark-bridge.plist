@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- Spark Bridge launchd agent (template). setup.sh fills in @ROOT@, @ENV_FILE@ and @LOG@ and
+<!-- SpArk Room Bridge launchd agent (template). setup.sh fills in @ROOT@, @ENV_FILE@ and @LOG@ and
      installs it as ~/Library/LaunchAgents/com.kaperkunde.spark-bridge.plist.
      macOS asks for Bluetooth permission only for a program started from a terminal: run
      host/.venv/bin/spark-bridge once in Terminal and allow it before relying on this agent. -->

@@ -22,7 +22,7 @@
 #define CMD_SEND_TRACE_PATH           36
 #define CMD_GET_STATS                 56
 #define CMD_RUN_CLI_COMMAND           66
-// Spark extension (SparkNode1.3): per-session opt-in features, see HOSTLINK.md
+// SpArk extension (SpArkNode1.3): per-session opt-in features, see HOSTLINK.md
 #define CMD_SPARK_HOST_FEATURES       0xC0
 
 // stats sub-types for CMD_GET_STATS
@@ -49,7 +49,7 @@
 #define RESP_CODE_SIGNATURE           20
 #define RESP_CODE_STATS               24
 #define RESP_CODE_CLI_REPLY           29
-// Spark extension (SparkNode1.3): channel message with SNR, RSSI and the route (hop hashes);
+// SpArk extension (SpArkNode1.3): channel message with SNR, RSSI and the route (hop hashes);
 // only sent to a host that enabled HOST_FEATURE_CHANNEL_PATH
 #define RESP_CODE_SPARK_CHANNEL_MSG   0xC1
 

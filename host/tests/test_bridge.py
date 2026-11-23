@@ -609,7 +609,7 @@ def test_public_enable_is_logged_with_who_and_when(env, caplog):
     assert b.store.last_audit(CHAT, "send public off") == (int(clock.t), 99)
 
 
-# ---- SparkBridge1.3: hops, SNR and route; send logging; closed Discord session ----------------
+# ---- SpArkBridge1.3: hops, SNR and route; send logging; closed Discord session ----------------
 
 from spark_bridge.bridge import ChatClosed  # noqa: E402
 

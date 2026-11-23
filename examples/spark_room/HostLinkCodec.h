@@ -77,7 +77,7 @@ size_t buildRoomPost(uint8_t* out, const uint8_t room_prefix6[6], uint32_t post_
 size_t buildChannelMsg(uint8_t* out, int8_t snr_x4, uint8_t chan_idx, uint8_t path_len, uint32_t sender_ts,
                        const char* text, size_t text_len);
 
-// ---- SparkNode1.3 extensions ----
+// ---- SpArkNode1.3 extensions ----
 // Number of hop-hash bytes a packed path_len byte stands for (0xFF = direct = 0 bytes).
 size_t pathByteCount(uint8_t path_len);
 // PUSH_CODE_LOG_RX_DATA, upstream companion layout: 0x88, i8 snr x4, i8 rssi, raw packet bytes.
@@ -101,7 +101,7 @@ size_t buildSignStart(uint8_t* out, uint32_t max_len);
 
 // ---- command parsers (payload includes the code byte) ----
 // SEND_CHANNEL_TXT_MSG: code, txt_type, chan_idx, u32 timestamp, text[, 0x00, sender name].
-// The optional trailer (SparkNode1.2) is everything after the first NUL in the text field, up to
+// The optional trailer (SpArkNode1.2) is everything after the first NUL in the text field, up to
 // a second NUL or the frame end. sender_len is 0 when there is no trailer (or it is empty).
 struct ChannelSendCmd {
   uint8_t txt_type, chan_idx; uint32_t timestamp;

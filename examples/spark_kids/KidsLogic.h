@@ -1,6 +1,6 @@
 #pragma once
 
-// Pure helpers of the SparkKids firmware (no Arduino), unit tested in test/test_spark_members.
+// Pure helpers of the SpArkKids firmware (no Arduino), unit tested in test/test_spark_members.
 
 #include <stdint.h>
 #include <stddef.h>

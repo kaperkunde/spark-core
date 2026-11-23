@@ -1,5 +1,5 @@
 #pragma once
-// SparkNode: pure helpers for the `dfu` command (BLE OTA update through the bootloader).
+// SpArkNode: pure helpers for the `dfu` command (BLE OTA update through the bootloader).
 // No Arduino dependencies, so test_spark_hostlink can test them natively.
 //
 // `dfu` [force]: reply "OK - dfu <bootloader MAC> ...", then the node drops the bond data the

@@ -25,6 +25,7 @@ log = logging.getLogger("spark_bridge.discord")
 
 NO_MENTIONS = discord.AllowedMentions.none()
 UNKNOWN_CHANNEL = 10003
+LEGACY_WEBHOOK_NAME = "Spark Bridge"   # default webhook name before SpArkBridge1.3
 BANNED_NAME_PARTS = ("discord", "clyde")  # Discord rejects webhook usernames containing these
 
 
@@ -91,7 +92,8 @@ class DiscordChat:
                 return self._hooks[ch.id]
         try:
             for wh in await ch.webhooks():
-                if wh.name == self.webhook_name and wh.token:  # token only on hooks this bot owns
+                # token only on hooks this bot owns; the pre-1.3 default name is reused, not duplicated
+                if wh.name in (self.webhook_name, LEGACY_WEBHOOK_NAME) and wh.token:
                     self._hooks[ch.id] = wh
                     return wh
             wh = await ch.create_webhook(name=self.webhook_name, reason="spark-bridge mesh authors")
@@ -259,7 +261,7 @@ class SparkClient(discord.Client):
 
 
 def build_group(client: SparkClient) -> app_commands.Group:
-    group = app_commands.Group(name="spark", description="Spark Bridge: mesh and Discord", guild_only=True)
+    group = app_commands.Group(name="spark", description="SpArk Room Bridge: mesh and Discord", guild_only=True)
     ONOFF = [app_commands.Choice(name="on", value=1), app_commands.Choice(name="off", value=0)]
     TARGETS = [app_commands.Choice(name=n, value=n) for n in ("none", "public", "room", "both")]
     RATES = [app_commands.Choice(name=n, value=n) for n in ("none", "channel", "user")]

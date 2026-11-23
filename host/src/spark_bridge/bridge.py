@@ -42,7 +42,7 @@ MEMBERS_REFRESH_SECONDS = 300   # at most this often when an unknown author show
 
 
 def parse_members(text: str) -> tuple[list[tuple[str, str, bool]], int | None]:
-    """Parse one reply of the node's `members` CLI command (SparkNode1): (prefix, name, admin) per
+    """Parse one reply of the node's `members` CLI command (SpArkNode1): (prefix, name, admin) per
     member with a name, and the start index of the next page. Unrecognised lines (an older
     firmware's "unknown command") are ignored."""
     out: list[tuple[str, str, bool]] = []
@@ -75,7 +75,7 @@ class WhereFix:
 
 
 def parse_where(text: str) -> tuple[list[WhereFix], int | None]:
-    """Parse one reply of the node's `where` CLI command (SparkNode1). Returns the fixes and the start
+    """Parse one reply of the node's `where` CLI command (SpArkNode1). Returns the fixes and the start
     index of the next page, if any. Lines are parsed from the right: names may contain spaces."""
     fixes: list[WhereFix] = []
     more = None
@@ -426,7 +426,7 @@ class Bridge:
         name = self.sender_name(m.user_id, m.author)
         full = tag(name, body, ch.prefix)
         if ch.sends_to("public"):
-            # With prefix on, a SparkNode1.2+ node sends "<alias>: <text>" itself (sender name in
+            # With prefix on, a SpArkNode1.2+ node sends "<alias>: <text>" itself (sender name in
             # the frame), so there is no "<node>: [alias] text" double name. Older nodes: tag.
             use_sender = ch.prefix and getattr(self.node, "supports_sender", False)
             if use_sender:
@@ -596,7 +596,7 @@ class Bridge:
         return reply or "(no reply)"
 
     async def refresh_member_names(self) -> int:
-        """Learn names from the room's member directory (`members`, SparkNode1): a kid's device
+        """Learn names from the room's member directory (`members`, SpArkNode1): a kid's device
         names itself there even when its advert never reaches the room. Returns names stored."""
         self._members_refreshed = self.clock()
         if not self.node.connected:

@@ -2,7 +2,7 @@
 
 This makes the station an observer for the DutchMeshCore collectors (MC-Radar) or Let's Mesh,
 "option 2" of meshwiki.nl/wiki/Observer: the node has no WiFi, so it hands raw received packets
-to the bridge (HostLink LOG_RX_DATA, SparkNode1.3) and the bridge publishes them.
+to the bridge (HostLink LOG_RX_DATA, SpArkNode1.3) and the bridge publishes them.
 
 Format (Cisien/meshcoretomqtt, agessaman/meshcore-packet-capture):
   topic    meshcore/<IATA>/<PUBKEY>/packets   one JSON object per received packet (not retained)
@@ -274,7 +274,7 @@ class Observer:
         msg: dict[str, Any] = {"status": status,
                                "timestamp": datetime.fromtimestamp(self._clock(), timezone.utc).isoformat(),
                                "origin": self.origin, "origin_id": self.pubkey,
-                               "model": "SenseCAP Solar P1 (SparkNode)", "firmware_version": self.node.version,
+                               "model": "SenseCAP Solar P1 (SpArkNode)", "firmware_version": self.node.version,
                                "client_version": CLIENT}
         radio = getattr(self.node, "radio", "")
         if radio:
@@ -302,7 +302,7 @@ class Observer:
         if not getattr(self.node, "connected", False):
             node = "waiting (link down)"
         else:
-            node = "on" if feed else "off (the node needs SparkNode1.3)"
+            node = "on" if feed else "off (the node needs SpArkNode1.3)"
         return (f"on, region {self.iata}, raw RX feed {node}, {self.packets} packets; " + "; ".join(parts))
 
     # ---- credentials ----------------------------------------------------------------------
@@ -366,7 +366,7 @@ class Observer:
                 continue
             v = getattr(self.node, "node_version", None)
             if v is not None and v < (1, 3):
-                await self._sleep(5.0)   # no raw RX feed and no signing before SparkNode1.3
+                await self._sleep(5.0)   # no raw RX feed and no signing before SpArkNode1.3
                 continue
             started = self._clock()
             try:

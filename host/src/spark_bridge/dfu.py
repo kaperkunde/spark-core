@@ -1,4 +1,4 @@
-"""BLE OTA update of a SparkNode through the Adafruit nRF52 bootloader (Nordic legacy DFU, SDK 11).
+"""BLE OTA update of a SpArkNode through the Adafruit nRF52 bootloader (Nordic legacy DFU, SDK 11).
 
 Application images only. Modelled on nrf-ota's dfu.py (OpenDisplay, Apache-2.0) and the
 bootloader's dfu_transport_ble.c, with a stricter failure policy:
@@ -10,7 +10,7 @@ bootloader's dfu_transport_ble.c, with a stricter failure policy:
   receipt is not awaited even when it closes a PRN window;
 - Start may take long (the bootloader erases the old app first): up to 60 s;
 - before Start is accepted, a failure sends Reset: the old app is intact and boots again;
-- after Start the old app is gone. Reset is then sent only to a Spark bootloader (DIS firmware
+- after Start the old app is gone. Reset is then sent only to a SpArk bootloader (DIS firmware
   revision contains "spark"), which comes back in OTA mode for a retry. A stock bootloader
   would come back in USB mode, so it never gets a Reset after Start;
 - after Activate, success is not claimed here: the caller verifies the running build.
@@ -47,7 +47,7 @@ STATUS = {1: "success", 2: "invalid state", 3: "not supported", 4: "data size ex
 PACKET_SIZE = 20
 PRN = 8  # the bootloader README: 8 or less, or it runs out of buffers
 
-# SparkNode limits (variants/spark_p1/platformio.ini): app region 0x27000..0xD4000; above it the
+# SpArkNode limits (variants/spark_p1/platformio.ini): app region 0x27000..0xD4000; above it the
 # erase would reach the room post store.
 APP_START = 0x27000
 APP_MAX_SIZE = 708608
@@ -108,7 +108,7 @@ class Package:
     image: bytes
     init: bytes
     init_info: InitPacket
-    version: str = ""  # "v1.18.0-SparkNode1.1", from the image's SPARK-BUILD tag
+    version: str = ""  # "v1.18.0-SpArkNode1.1", from the image's SPARK-BUILD tag
     build_id: str = ""  # the node's `get build` must report this after the update
     warnings: list[str] = field(default_factory=list)
 
@@ -156,7 +156,7 @@ def check_package(path: str, image: bytes, init: bytes, *, max_size: int = APP_M
     if m:
         pkg.version, pkg.build_id = m.group(1).decode(), m.group(2).decode()
     else:
-        pkg.warnings.append("no SPARK-BUILD tag in the image: not a SparkNode1.1+ build, the result cannot be verified")
+        pkg.warnings.append("no SPARK-BUILD tag in the image: not a SpArkNode1.1+ build, the result cannot be verified")
     return pkg
 
 
@@ -370,7 +370,7 @@ async def transfer(connect: Callable[[], Awaitable[Transport]], pkg: Package, *,
     `connect` returns a Transport connected to the bootloader (it scans by advertisement).
     - Failure before Start: retry Start in the same, still idle, bootloader session; after the
       last attempt send Reset so the old application boots again.
-    - Failure after Start: a Spark bootloader gets Reset (it restarts in OTA mode, the app is
+    - Failure after Start: a SpArk bootloader gets Reset (it restarts in OTA mode, the app is
       already gone) and the next attempt starts over; a stock bootloader is left alone.
     Raises DfuError (with app_erased) when it gives up.
     """
@@ -398,7 +398,7 @@ async def transfer(connect: Callable[[], Awaitable[Transport]], pkg: Package, *,
             if failed and t is not None and not erased and attempt == attempts:
                 await _reset(t, connect)  # give up before Start: the old app boots again
             elif failed and t is not None and erased and spark:
-                await _reset(t, connect)  # Spark bootloader: restart the OTA session
+                await _reset(t, connect)  # SpArk bootloader: restart the OTA session
             if t is not None:
                 await t.disconnect()
         if erased and not spark:

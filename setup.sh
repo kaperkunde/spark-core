@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Spark setup: configure, build, flash and install SparkNode, SparkKids and Spark Bridge.
+# SpArk setup: configure, build, flash and install SpArkNode, SpArkKids and SpArk Room Bridge.
 #
 #   ./setup.sh                 interactive install (macOS or Raspberry Pi OS)
 #   ./setup.sh --dry-run       ask everything, write .env.dry-run, print every command instead of
@@ -260,9 +260,9 @@ choose_port() {  # choose_port VAR "what"
 # ---------------------------------------------------------------------------------------------
 # start
 
-[ -f "$EXAMPLE" ] || die "$EXAMPLE is missing: run setup.sh from a Spark checkout."
-title "Spark setup"
-info "SparkNode (roof node), SparkKids (T-Deck Plus) and Spark Bridge (Discord), based on MeshCore v1.18."
+[ -f "$EXAMPLE" ] || die "$EXAMPLE is missing: run setup.sh from a SpArk checkout."
+title "SpArk setup"
+info "SpArkNode (roof node), SpArkKids (T-Deck Plus) and SpArk Room Bridge (Discord), based on MeshCore v1.18."
 [ "$DRY_RUN" = 1 ] && warn "Dry run: answers go to $ENV_FILE; commands are printed, not run."
 info "Configuration file: $ENV_FILE"
 
@@ -272,13 +272,13 @@ elif [ "$DRY_RUN" = 1 ] && [ -f "$ROOT/.env" ]; then info "Existing values from 
 
 # 1. components ------------------------------------------------------------------------------
 title "1. What do you want to set up?"
-info "SparkNode:    room server + relay firmware for the SenseCAP Solar Node P1 (the roof node)"
-info "Spark Bridge: the Discord service, on a Raspberry Pi or computer within Bluetooth range of the node"
-info "SparkKids:    messenger firmware for the LilyGO T-Deck Plus (kids, or anyone who wants it simple)"
+info "SpArkNode:    room server + relay firmware for the SenseCAP Solar Node P1 (the roof node)"
+info "SpArk Room Bridge: the Discord service, on a Raspberry Pi or computer within Bluetooth range of the node"
+info "SpArkKids:    messenger firmware for the LilyGO T-Deck Plus (kids, or anyone who wants it simple)"
 DO_NODE=0; DO_BRIDGE=0; DO_KIDS=0
-yesno "Set up SparkNode?" y && DO_NODE=1
-yesno "Set up Spark Bridge?" y && DO_BRIDGE=1
-yesno "Set up SparkKids?" n && DO_KIDS=1
+yesno "Set up SpArkNode?" y && DO_NODE=1
+yesno "Set up SpArk Room Bridge?" y && DO_BRIDGE=1
+yesno "Set up SpArkKids?" n && DO_KIDS=1
 [ $((DO_NODE + DO_BRIDGE + DO_KIDS)) -gt 0 ] || { info "Nothing chosen. Bye."; exit 0; }
 
 # 2. questions -------------------------------------------------------------------------------
@@ -307,7 +307,7 @@ if [ "$DO_NODE" = 1 ] || [ "$DO_KIDS" = 1 ]; then
 fi
 
 info ""
-info "${B}Time zone${N} (SparkKids clock, bridge health report)"
+info "${B}Time zone${N} (SpArkKids clock, bridge health report)"
 TZ_DEFAULT="$BRIDGE_TZ"
 if [ -z "$TZ_DEFAULT" ] || { [ "$TZ_DEFAULT" = UTC ] && [ "${SPARK_TZ:-UTC0}" = UTC0 ]; }; then TZ_DEFAULT="$(system_tz)"; fi
 while :; do
@@ -320,7 +320,7 @@ done
 
 if [ "$DO_NODE" = 1 ] || [ "$DO_KIDS" = 1 ] || [ "$DO_BRIDGE" = 1 ]; then
   info ""
-  info "${B}SparkNode${N}"
+  info "${B}SpArkNode${N}"
   ask_text SPARK_NODE_NAME "Node name (adverts, app, BLE 'MeshCore-<name>')" "${SPARK_NODE_NAME:-SparkNode}" 31
 fi
 
@@ -337,7 +337,7 @@ if [ "$DO_NODE" = 1 ]; then
     valid_text "$SPARK_ROOM_PASSWORD" && [ -n "$SPARK_ROOM_PASSWORD" ] && [ "${#SPARK_ROOM_PASSWORD}" -le 15 ] && break
     warn "1 to 15 characters, no quotes, backslashes, backticks or \$."; SPARK_ROOM_PASSWORD=""
   done
-  info "The BLE PIN protects the link to Spark Bridge. Empty = BLE off until you set one on the node's USB console."
+  info "The BLE PIN protects the link to SpArk Room Bridge. Empty = BLE off until you set one on the node's USB console."
   while :; do
     ask_secret SPARK_BLE_PIN "BLE PIN (6 digits, not starting with 0)" "$SPARK_BLE_PIN" "$( [ "$DO_BRIDGE" = 1 ] && printf '%s%s' "$(rand_from 1-9 1)" "$(rand_from 0-9 5)" )"
     [ -z "$SPARK_BLE_PIN" ] && break
@@ -348,11 +348,11 @@ fi
 
 if [ "$DO_KIDS" = 1 ]; then
   info ""
-  info "${B}SparkKids${N}"
+  info "${B}SpArkKids${N}"
   ask_text KIDS_ROOM_NAME "Room name on the kids' screen" "${KIDS_ROOM_NAME:-$SPARK_NODE_NAME}" 15
   if [ "$DO_NODE" = 0 ]; then
     while :; do
-      ask_secret KIDS_ROOM_PASSWORD "The SparkNode's room password" "${KIDS_ROOM_PASSWORD:-$SPARK_ROOM_PASSWORD}" ""
+      ask_secret KIDS_ROOM_PASSWORD "The SpArkNode's room password" "${KIDS_ROOM_PASSWORD:-$SPARK_ROOM_PASSWORD}" ""
       [ -n "$KIDS_ROOM_PASSWORD" ] && valid_text "$KIDS_ROOM_PASSWORD" && break
       warn "Needed: the kids' devices log in with it."
       [ "$DEFAULTS" = 1 ] && { KIDS_ROOM_PASSWORD="$(rand_from 'a-km-np-z2-9' 8)"; warn "Dry-run placeholder used."; break; }
@@ -372,13 +372,13 @@ if [ "$DO_KIDS" = 1 ]; then
   if [ "$DO_NODE" = 1 ] && [ -z "$KIDS_ROOM_KEY" ]; then
     info "The room key (the node's public key) is read from the node after flashing it (step 4)."
   else
-    ask_match KIDS_ROOM_KEY "SparkNode public key (64 hex, node console: get public.key; empty = read it over USB later)" "$KIDS_ROOM_KEY" '^([0-9A-Fa-f]{64})?$' "64 hex digits, or empty"
+    ask_match KIDS_ROOM_KEY "SpArkNode public key (64 hex, node console: get public.key; empty = read it over USB later)" "$KIDS_ROOM_KEY" '^([0-9A-Fa-f]{64})?$' "64 hex digits, or empty"
   fi
 fi
 
 if [ "$DO_BRIDGE" = 1 ]; then
   info ""
-  info "${B}Spark Bridge${N}"
+  info "${B}SpArk Room Bridge${N}"
   info "Discord: create a dedicated application + bot (see spark/README.md 'Discord setup')."
   ask_secret DISCORD_TOKEN "Discord bot token" "$DISCORD_TOKEN" ""
   [ -z "$DISCORD_TOKEN" ] && warn "No token: the bridge will not start until DISCORD_TOKEN is set in $ENV_FILE."
@@ -393,7 +393,7 @@ if [ "$DO_BRIDGE" = 1 ]; then
   ask BRIDGE_DEFAULT_PER_MINUTE "Default messages per minute for a new Discord channel" "${BRIDGE_DEFAULT_PER_MINUTE:-3}"
   info ""
   info "MQTT observer (optional): publish every packet the node hears to the DutchMeshCore"
-  info "collectors (MC-Radar) or Let's Mesh. Needs SparkNode1.3. The bridge signs its login with"
+  info "collectors (MC-Radar) or Let's Mesh. Needs SpArkNode1.3. The bridge signs its login with"
   info "the node's own key over the node link; there is no account or password for these brokers."
   case "$BRIDGE_OBSERVER" in 1|true|yes|on) __obs=y ;; *) __obs=n ;; esac
   if yesno "Enable the MQTT observer?" "$__obs"; then
@@ -448,7 +448,7 @@ find_uf2_drive() {
 }
 
 flash_node() {
-  title "4. Flash SparkNode"
+  title "4. Flash SpArkNode"
   info "1. Connect the SenseCAP Solar Node P1 to this computer over USB."
   info "2. Double-press its reset button quickly. A drive called XIAO-BOOT (or similar) appears."
   info "   (Existing node? Its key, settings, ACL and stored posts are kept. Settings from .env"
@@ -469,13 +469,13 @@ flash_node() {
   info "Copying to $drive ..."
   cp "$NODE_UF2" "$drive/" || true   # the drive disappears as soon as the copy completes
   sync || true
-  ok "SparkNode firmware copied. The node reboots by itself."
+  ok "SpArkNode firmware copied. The node reboots by itself."
 }
 
 # Update over Bluetooth: spark-bridge update (host/src/spark_bridge/update.py) pauses a running
 # bridge, checks package and node, sends dfu, transfers to the bootloader and verifies the build.
 update_node_ble() {
-  title "4. Update SparkNode over Bluetooth"
+  title "4. Update SpArkNode over Bluetooth"
   local venv="$ROOT/host/.venv"
   if [ ! -x "$venv/bin/spark-bridge" ]; then
     info "spark-bridge is not installed yet; installing it into $venv."
@@ -483,20 +483,20 @@ update_node_ble() {
     [ -x "$venv/bin/python" ] || run python3 -m venv "$venv"
     run "$venv/bin/pip" install --quiet -e "$ROOT/host"
   fi
-  info "The node must run SparkNode1.1 or later (SparkNode1 has no dfu command: use usb once)."
+  info "The node must run SpArkNode1.1 or later (SpArkNode1 has no dfu command: use usb once)."
   info "The bridge host must be paired with the node (BRIDGE_TRANSPORT=ble) or connected by USB."
   info "Battery at least 3.7 V; the transfer takes about 3 minutes; keep this computer awake."
   run "$venv/bin/spark-bridge" update --env "$ENV_FILE" "$NODE_ZIP" || \
     warn "Update not completed. The message above says whether the old app is intact. See spark/README.md 'Update over Bluetooth'."
 }
 
-# One-time: replace the node's UF2 bootloader with the OTA-safe Spark build (spark/bootloader).
+# One-time: replace the node's UF2 bootloader with the OTA-safe SpArk build (spark/bootloader).
 install_bootloader() {
   local bl="$ROOT/out/spark/bootloader/update-xiao_nrf52840_ble_bootloader-0.11.0-spark1_nosd.uf2" drive="" i
   info ""
   info "${B}OTA-safe bootloader (optional, one time, over USB)${N}"
   info "  The stock bootloader falls back to USB-only mode when a Bluetooth update breaks off: on a"
-  info "  roof that means a ladder. The Spark build (Adafruit bootloader 0.11.0 + DEFAULT_TO_OTA_DFU)"
+  info "  roof that means a ladder. The SpArk build (Adafruit bootloader 0.11.0 + DEFAULT_TO_OTA_DFU)"
   info "  then keeps waiting for a Bluetooth retry instead. Double reset still opens XIAO-BOOT."
   info "  Risks: an interrupted bootloader copy can brick the node (recovery: an SWD programmer);"
   info "  room posts stored on the node may be lost (the copy uses part of the post store)."
@@ -512,7 +512,7 @@ install_bootloader() {
   [ -n "$drive" ] || { warn "No UF2 drive found; bootloader not installed."; return 0; }
   cat "$drive/INFO_UF2.TXT"
   if ! grep -q "Board-ID: nRF52840-SeeedXiao-v1" "$drive/INFO_UF2.TXT"; then
-    warn "This bootloader reports a different Board-ID: the Spark build is not for this board. Not installed."
+    warn "This bootloader reports a different Board-ID: the SpArk build is not for this board. Not installed."
     return 0
   fi
   if grep -q "0.11.0-spark1" "$drive/INFO_UF2.TXT"; then ok "The OTA-safe bootloader is already installed."; return 0; fi
@@ -528,10 +528,10 @@ install_bootloader() {
 
 read_node_key() {
   local port key
-  info "The kids' devices need the SparkNode's public key."
+  info "The kids' devices need the SpArkNode's public key."
   yesno "Read it from the node over USB now?" y || return 0
   ensure_tools_venv
-  choose_port port "SparkNode"
+  choose_port port "SpArkNode"
   if [ "$DRY_RUN" = 1 ]; then printf '%s  + %s spark/tools/node_cli.py --port %s --public-key%s\n' "$D" "$TOOLS_PY" "$port" "$N"; return; fi
   info "Waiting 10 s for the node to boot..."; sleep 10
   if key="$("$TOOLS_PY" "$ROOT/spark/tools/node_cli.py" --port "$port" --public-key)"; then
@@ -545,15 +545,15 @@ read_node_key() {
 if [ "$DO_NODE" = 1 ] || [ "$DO_KIDS" = 1 ]; then ensure_pio; fi
 
 if [ "$DO_NODE" = 1 ]; then
-  title "3. Build SparkNode"
+  title "3. Build SpArkNode"
   pio_run run -e "$NODE_ENV"
   pio_run run -e "$NODE_ENV" -t create_uf2 -t dfu_zip
   [ "$DRY_RUN" = 1 ] || ok "Built $NODE_UF2 and $NODE_ZIP"
   install_bootloader
   info ""
-  info "Install SparkNode:"
+  info "Install SpArkNode:"
   info "  usb  copy the UF2 to the node's XIAO-BOOT drive (needs a USB cable; always works)"
-  info "  ble  update over Bluetooth with spark-bridge update (the node must already run SparkNode1.1"
+  info "  ble  update over Bluetooth with spark-bridge update (the node must already run SpArkNode1.1"
   info "       or later; the bridge is paused while it runs)"
   info "  skip do it later"
   ask_match NODE_INSTALL "How" "usb" '^(usb|ble|skip)$' "Type usb, ble or skip."
@@ -565,14 +565,14 @@ if [ "$DO_NODE" = 1 ]; then
 fi
 
 flash_kids() {
-  title "4. Flash SparkKids"
+  title "4. Flash SpArkKids"
   ensure_tools_venv
   info "Put the T-Deck Plus in download mode:"
   info "  switch it off, connect USB, hold the trackball pressed, switch it on, release the trackball."
   pause "T-Deck in download mode?"
   local port mac dir first=n h1 h2
   choose_port port "T-Deck Plus"
-  if yesno "Is this the first Spark flash on this T-Deck?" y; then first=y; fi
+  if yesno "Is this the first SpArk flash on this T-Deck?" y; then first=y; fi
   if [ "$first" = y ]; then
     info "Before the first flash, back up the whole 16 MB flash (the original firmware, its settings"
     info "and any licence). Never erase the device; this backup restores it bit for bit."
@@ -600,16 +600,16 @@ flash_kids() {
   else
     run "$ESPTOOL" --chip esp32s3 -p "$port" -b 921600 --after watchdog-reset write-flash 0x10000 "$KIDS_APP"
   fi
-  [ "$DRY_RUN" = 1 ] || ok "SparkKids flashed. The T-Deck restarts and asks for a name."
+  [ "$DRY_RUN" = 1 ] || ok "SpArkKids flashed. The T-Deck restarts and asks for a name."
   info "Parent settings: People > gear > Parent settings, PIN from KIDS_PARENT_PIN."
 }
 
 if [ "$DO_KIDS" = 1 ]; then
   if [ -z "$(get KIDS_ROOM_KEY)" ]; then read_node_key; fi
   if [ -z "$(get KIDS_ROOM_KEY)" ] && [ "$DRY_RUN" = 0 ]; then
-    warn "KIDS_ROOM_KEY is still empty: SparkKids cannot be built. Add it to $ENV_FILE and run setup.sh again."
+    warn "KIDS_ROOM_KEY is still empty: SpArkKids cannot be built. Add it to $ENV_FILE and run setup.sh again."
   else
-    title "3. Build SparkKids"
+    title "3. Build SpArkKids"
     if [ "$DRY_RUN" = 1 ] && [ -z "$(get KIDS_ROOM_KEY)" ]; then info "(the real run builds once KIDS_ROOM_KEY is known)"; fi
     pio_run run -e "$KIDS_ENV"
     pio_run run -e "$KIDS_ENV" -t mergebin
@@ -621,14 +621,14 @@ fi
 
 # 5. bridge -----------------------------------------------------------------------------------
 install_bridge() {
-  title "5. Install Spark Bridge"
+  title "5. Install SpArk Room Bridge"
   need_python
   if [ "$PLATFORM" = linux ] && ! command -v bluetoothctl >/dev/null 2>&1; then run sudo apt-get install -y bluez; fi
   local venv="$ROOT/host/.venv"
   [ -x "$venv/bin/python" ] || run python3 -m venv "$venv"
   run "$venv/bin/pip" install --quiet --upgrade pip
   run "$venv/bin/pip" install --quiet -e "$ROOT/host"
-  ok "Spark Bridge installed in $venv"
+  ok "SpArk Room Bridge installed in $venv"
 
   if [ "$(get BRIDGE_TRANSPORT)" = ble ]; then
     info ""
@@ -679,8 +679,8 @@ install_bridge() {
 
 title "Done"
 info "Configuration: $ENV_FILE"
-[ "$DO_NODE" = 1 ] && info "SparkNode: on the node's USB console 'ver' shows v1.18.0-SparkNode1.3. Later updates: ./setup.sh (ble)."
-[ "$DO_BRIDGE" = 1 ] && info "Spark Bridge: in Discord, run /spark status in a channel, then /spark receive both."
-[ "$DO_KIDS" = 1 ] && info "SparkKids: type a name on the T-Deck; it logs in to the room by itself."
+[ "$DO_NODE" = 1 ] && info "SpArkNode: on the node's USB console 'ver' shows v1.18.0-SpArkNode1.3. Later updates: ./setup.sh (ble)."
+[ "$DO_BRIDGE" = 1 ] && info "SpArk Room Bridge: in Discord, run /spark status in a channel, then /spark receive both."
+[ "$DO_KIDS" = 1 ] && info "SpArkKids: type a name on the T-Deck; it logs in to the room by itself."
 info "More: spark/README.md"
 exit 0

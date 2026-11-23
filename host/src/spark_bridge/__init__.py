@@ -1,3 +1,3 @@
-"""Spark Bridge: SparkNode (MeshCore room server with HostLink) <-> Discord."""
+"""SpArk Room Bridge: SpArkNode (MeshCore room server with HostLink) <-> Discord."""
 
 __version__ = "1.3"

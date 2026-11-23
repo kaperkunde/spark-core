@@ -1,6 +1,6 @@
 # Upstream handling
 
-- `main` mirrors `upstream/main` (fast-forward only). Spark's work sits on MeshCore tag
+- `main` mirrors `upstream/main` (fast-forward only). SpArk's work sits on MeshCore tag
   `room-server-v1.18.0` (the same commit as `companion-v1.18.0` / `repeater-v1.18.0`).
   New upstream room-server tags are merged in (`git merge <tag>`, not rebase, once the branch
   is public).
@@ -9,18 +9,20 @@
 
 ## Versions and tags
 
-Each part has its own counter: **SparkNode1.3**, **SparkBridge1.3**, **SparkKids1**, and so on. The
-MeshCore base stays visible: the node reports `v1.18.0-SparkNode1.3`, SparkKids shows
-`SparkKids1 (MeshCore v1.18.0)`, the bridge package is `spark-bridge` version `1.3`
-(`spark-bridge --version` prints `SparkBridge1.3`). SparkNode1.1 and SparkBridge1.1 add Bluetooth
+Each part has its own counter: **SpArkNode1.3**, **SpArkBridge1.3**, **SpArkKids1**, and so on. The
+MeshCore base stays visible: the node reports `v1.18.0-SpArkNode1.3`, SpArkKids shows
+`SpArkKids1 (MeshCore v1.18.0)`, the bridge package is `spark-bridge` version `1.3`
+(`spark-bridge --version` prints `SpArkBridge1.3`). SpArkNode1.1 and SpArkBridge1.1 add Bluetooth
 updates (`dfu`, `spark-bridge update`); the node also reports a build id (`get build`).
-SparkNode1.2 and SparkBridge1.2 add the HostLink sender name (Discord aliases on Public), the
+SpArkNode1.2 and SpArkBridge1.2 add the HostLink sender name (Discord aliases on Public), the
 confirmation for Discord -> Public send, and the repeater's region/loop checks in the room
-server's relay. SparkNode1.3 and SparkBridge1.3 add the MQTT observer (raw RX feed, node-signed
-tokens), channel routes with hops/SNR footers, and send logging. Git tags use the same names
-(`SparkNode1`, `SparkBridge1`, `SparkKids1`, then `SparkNode1.1`, `SparkBridge1.1`, `SparkNode1.2`,
-`SparkBridge1.2`, `SparkNode1.3`, `SparkBridge1.3`). `FIRMWARE_VERSION` is limited to 20 bytes
-(`v1.18.0-SparkNode1.3` is exactly 20): a bug-fix release keeps that label and sets
+server's relay. SpArkNode1.3 and SpArkBridge1.3 add the MQTT observer (raw RX feed, node-signed
+tokens), channel routes with hops/SNR footers, and send logging. Git tags use the version names.
+Tags made before the SpArk spelling keep the old casing (`SparkNode1`, `SparkBridge1`,
+`SparkKids1`, `SparkNode1.1`, `SparkBridge1.1`, `SparkNode1.2`, `SparkBridge1.2`); from 1.3 on
+tags use the new one (`SpArkNode1.3`, `SpArkBridge1.3`). Hosts read both spellings of the
+version label, case-insensitively. `FIRMWARE_VERSION` is limited to 20 bytes
+(`v1.18.0-SpArkNode1.3` is exactly 20): a bug-fix release keeps that label and sets
 `-D SPARK_RELEASE_PATCH=<n>` (see HOSTLINK.md, "Version labels"). Version strings live in `variants/spark_p1/platformio.ini`
 (`FIRMWARE_VERSION`), `variants/spark_tdeck/platformio.ini` (`KIDS_FW_VERSION`) and
 `host/pyproject.toml` + `host/src/spark_bridge/__init__.py`.
@@ -35,7 +37,7 @@ tokens), channel routes with hops/SNR footers, and send logging. Git tags use th
 | `examples/simple_room_server/MyMesh.cpp` | `storePost` notify, `begin` restore, `loop` tick, `handleCommand` spark commands, repeat branch, login + `handleRequest` member hooks, new-install path hash mode default | the five above, `SPARK_PATH_HASH_MODE` |
 | `examples/simple_room_server/main.cpp` | `hostlink_setup()`, serial demux for `<` frames | `WITH_HOSTLINK` |
 | `src/helpers/nrf52/SerialBLEInterface.cpp` | `onSecured`: one Service Changed indication per boot | `SPARK_SERVICE_CHANGED` |
-| `.gitignore`, `README.md` | `.env` and local tool dirs ignored; Spark introduction on top of the MeshCore README | - |
+| `.gitignore`, `README.md` | `.env` and local tool dirs ignored; SpArk introduction on top of the MeshCore README | - |
 
 Everything else is new: `examples/spark_room/`, `examples/spark_kids/`, `variants/spark_p1/`,
 `variants/spark_tdeck/`, `test/test_spark_*`, `spark/`, `host/`, `setup.sh`, `.env.example`,

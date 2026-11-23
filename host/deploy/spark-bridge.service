@@ -1,7 +1,7 @@
-# Spark Bridge systemd unit (template). setup.sh fills in @USER@, @ROOT@ and @ENV_FILE@ and
+# SpArk Room Bridge systemd unit (template). setup.sh fills in @USER@, @ROOT@ and @ENV_FILE@ and
 # installs it as /etc/systemd/system/spark-bridge.service.
 [Unit]
-Description=Spark Bridge (SparkNode <-> Discord)
+Description=SpArk Room Bridge (SpArkNode <-> Discord)
 After=bluetooth.target network-online.target
 Wants=bluetooth.target network-online.target
 

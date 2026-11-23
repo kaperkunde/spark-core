@@ -46,7 +46,7 @@
   #define KIDS_TZ "UTC0"            // POSIX TZ string (.env SPARK_TZ) for the clock and message times
 #endif
 #ifndef KIDS_FW_VERSION
-  #define KIDS_FW_VERSION "SparkKids-dev"
+  #define KIDS_FW_VERSION "SpArkKids-dev"
 #endif
 
 #define LOGIN_REFRESH_MS (10UL * 60 * 1000)    // re-login (keeps the room pushing to us)

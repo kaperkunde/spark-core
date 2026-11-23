@@ -1,6 +1,6 @@
 #pragma once
 
-// T-Deck Plus peripherals for the SparkKids firmware: display (drawn into a PSRAM frame
+// T-Deck Plus peripherals for the SpArkKids firmware: display (drawn into a PSRAM frame
 // buffer, then pushed in one go), I2C keyboard, trackball, speaker, backlight.
 
 #include <Arduino.h>

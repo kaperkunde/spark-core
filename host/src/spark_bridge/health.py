@@ -78,7 +78,7 @@ class HealthMonitor:
         noise = s.get("noise_floor", row["noise"] if row else None)
         avail = self.availability(now)
         lines = [
-            f"**Spark health** ({local:%Y-%m-%d %H:%M} {self.cfg.tz})",
+            f"**SpArk health** ({local:%Y-%m-%d %H:%M} {self.cfg.tz})",
             f"- battery {self.cfg.dawn:%H:%M}: {mv(dawn)}",
             f"- battery {self.cfg.afternoon:%H:%M}: {mv(aft)}",
             f"- overnight change (today's dawn minus yesterday's afternoon): {delta}",

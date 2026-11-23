@@ -1,11 +1,14 @@
-# Spark Bridge (SparkBridge1.3)
+# SpArk Room Bridge (SpArkBridge1.3)
 
-The Discord service of [Spark](../spark/README.md). It connects to a SparkNode (MeshCore room
-server with the HostLink firmware) over BLE, USB serial or TCP (stub node) and bridges the mesh
-to Discord.
+The Discord service of [SpArk](../spark/README.md). Your SpArkNode room is a private room on the
+mesh; the bridge lets you read and answer it from Discord when you don't have your radio on you,
+plus a read-only mirror of MeshCore Public (and, optionally, an MQTT observer feed). It connects to
+the SpArkNode (MeshCore room server with the HostLink firmware) over BLE, USB serial or TCP (stub
+node). The command stays `spark-bridge`, the package `spark_bridge`, the slash commands `/spark`.
+The default webhook name is now "SpArk Room Bridge"; an existing "Spark Bridge" webhook is reused.
 
 ```
-mesh <-LoRa-> SparkNode <-BLE-> Spark Bridge <-network-> Discord
+mesh <-LoRa-> SpArkNode <-BLE-> SpArk Room Bridge <-network-> Discord
 ```
 
 When the bridge or BLE is down the node keeps working. The bridge reconnects by itself (backoff
@@ -76,11 +79,11 @@ the bridge adds no user permission system.
 | `/spark alias del user:@user` | remove an alias: the Discord display name is used again |
 | `/spark ratelimit none\|channel\|user [per_minute]` | no limit, or N messages/minute per channel or per user (default 3) |
 | `/spark receive none\|public\|room\|both` | mesh to Discord source copied into this channel |
-| `/spark footer on\|off` | a small line under each Public message: `2 hops · SNR 5.0 dB · via NL-AMS-DAR1 → Bella Vista`, or `direct · SNR 5.0 dB` (default on; the route needs SparkNode1.3) |
+| `/spark footer on\|off` | a small line under each Public message: `2 hops · SNR 5.0 dB · via NL-AMS-DAR1 → Bella Vista`, or `direct · SNR 5.0 dB` (default on; the route needs SpArkNode1.3) |
 | `/spark report on\|off` | the daily health line (`BRIDGE_HEALTH_REPORT`, default 15:05 in `BRIDGE_TZ`) and link up/down notices here |
 | `/spark health` | health now, live from the node (admin channels) |
 | `/spark cli command:<text>` | node CLI command (admin channels) |
-| `/spark where [name]` | latest GPS fix of every room member (or one), with its age and a Google Maps link (admin channels; needs SparkNode1 firmware with the member directory) |
+| `/spark where [name]` | latest GPS fix of every room member (or one), with its age and a Google Maps link (admin channels; needs SpArkNode1 firmware with the member directory) |
 
 Examples:
 
@@ -100,13 +103,13 @@ and when, is logged (a warning line in the bridge log and the `audit` table) and
 
 **Sender names.** With `prefix on`, a message from Discord is attributed to its author's alias
 (`/spark alias`), or else to their Discord display name with `:` and line breaks removed and cut
-to 31 bytes. On Public a SparkNode1.2 node sends it as the sender name, so the mesh shows
+to 31 bytes. On Public a SpArkNode1.2 node sends it as the sender name, so the mesh shows
 `BadPirate: Hallo` rather than `<node name>: [BadPirate] Hallo`; an older node gets the
 `[name] text` tag. Room posts are authored by the room itself, so they keep the `[name] text` tag
 (with the alias).
 
-**Hops, SNR and route (SparkBridge1.3).** Each Public message keeps how it arrived: SNR and hop
-count (all SparkNodes), RSSI and the hop hashes of the route (SparkNode1.3, HostLink frame 0xC1).
+**Hops, SNR and route (SpArkBridge1.3).** Each Public message keeps how it arrived: SNR and hop
+count (all SpArkNodes), RSSI and the hop hashes of the route (SpArkNode1.3, HostLink frame 0xC1).
 They are logged, stored with the message's dedup row (`seen_posts`: snr, rssi, hops, path) and
 shown in the footer. Hop hashes are translated to names from the adverts the node has heard
 (`get names`, GET_CONTACTS, NEW_ADVERT pushes; kept in the `names` table): a hash names a
@@ -120,7 +123,7 @@ hops, RSSI and route.
 
 Behaviour details:
 
-- Mesh to Discord uses a channel webhook named by `BRIDGE_WEBHOOK_NAME` (default "Spark Bridge") (found or created through the API,
+- Mesh to Discord uses a channel webhook named by `BRIDGE_WEBHOOK_NAME` (default "SpArk Room Bridge") (found or created through the API,
   cached in memory, token never stored) so the mesh author is the message author. Public: the
   name before the first `: `. Room: name from adverts/contacts, the node name for the room's own
   posts, else `node <8 hex>`. Mentions are always disabled. No webhook permission: fallback to
@@ -144,7 +147,7 @@ Behaviour details:
 
 With `BRIDGE_OBSERVER=1` the bridge makes the node an MQTT observer ("option 2" on
 [meshwiki.nl/wiki/Observer](https://meshwiki.nl/wiki/Observer): the node has no WiFi, the host
-publishes). It needs SparkNode1.3: the bridge asks the node for its raw RX feed (HostLink
+publishes). It needs SpArkNode1.3: the bridge asks the node for its raw RX feed (HostLink
 LOG_RX_DATA) at every connect, and publishes each packet as JSON in the format of
 [meshcoretomqtt](https://github.com/Cisien/meshcoretomqtt) and
 [meshcore-packet-capture](https://github.com/agessaman/meshcore-packet-capture):
@@ -188,7 +191,7 @@ broker connected or retrying, packets sent and dropped, and the last error.
 
 ## Updating the node over Bluetooth (`spark-bridge update`)
 
-For a node that already runs SparkNode1.1 or later (SparkNode1 has no `dfu` command: update it
+For a node that already runs SpArkNode1.1 or later (SpArkNode1 has no `dfu` command: update it
 once over USB with `setup.sh`). Build the package, then run the updater on the bridge host:
 
 ```sh
@@ -212,14 +215,14 @@ What it does, in order (it stops at the first problem):
 5. Finds the bootloader by its live advertisement (DFU service), never by a cached name.
 6. Transfers with its own DFU code (`dfu.py`): every receipt is checked, a missing receipt is
    checked against the bootloader's byte count, and Reset is never sent after the old app was
-   erased, except to the Spark bootloader, which restarts in OTA mode for a retry (3 attempts).
+   erased, except to the SpArk bootloader, which restarts in OTA mode for a retry (3 attempts).
 7. Verifies: reconnects to the app and compares `get build` with the package.
 
 On Linux it then removes the temporary bootloader device from BlueZ (`bluetoothctl remove
 <MAC+1>`; never the bonded node). On macOS it toggles Bluetooth once with `blueutil` (if
 installed) when the updated app cannot be reached. Exit codes: 0 done and verified, 1 failed
 with the old app intact, 2 bad config or package, 4 the node has no app and waits in its
-bootloader: then `spark-bridge update --in-bootloader <zip>` retries (Spark bootloader), or see
+bootloader: then `spark-bridge update --in-bootloader <zip>` retries (SpArk bootloader), or see
 "Recovery" in [spark/README.md](../spark/README.md#update-over-bluetooth).
 
 ## Testing without hardware

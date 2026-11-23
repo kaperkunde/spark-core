@@ -1,18 +1,19 @@
-# Spark: a MeshCore hub for your household and neighbourhood
+# SpArk: a MeshCore hub for your household and neighbourhood
 
-**This fork adds Spark to [MeshCore](https://github.com/meshcore-dev/MeshCore) v1.18.** Spark turns
+**This fork adds SpArk to [MeshCore](https://github.com/meshcore-dev/MeshCore) v1.18.** SpArk turns
 one solar roof node into a hub for your own people and devices, and a relay that helps the local mesh.
 
-- **SparkNode** (SparkNode1.3): firmware for a [SenseCAP Solar Node P1](https://www.seeedstudio.com/SenseCAP-Solar-Node-P1-for-Meshtastic-LoRa-p-6425.html)
+- **SpArkNode** (SpArkNode1.3): firmware for a [SenseCAP Solar Node P1](https://www.seeedstudio.com/SenseCAP-Solar-Node-P1-for-Meshtastic-LoRa-p-6425.html)
   on your roof. It is a MeshCore **room** with store-and-forward, so your tribe can talk even when
   they are not online at the same time, and a **relay** that strengthens the mesh. Other
   MeshCore-capable boards can work too.
-- **Spark Bridge** (SparkBridge1.3): a service on a Raspberry Pi or computer near the roof node. It
-  connects the SparkNode room and MeshCore Public with **Discord**, one-way or two-way (more
-  platforms later).
-- **SparkKids** (SparkKids1): firmware for the **LilyGO T-Deck Plus**: a simple touch messenger
+- **SpArk Room Bridge** (SpArkBridge1.3): a service on a Raspberry Pi or computer near the roof node.
+  Your SpArkNode room is a private room on the mesh; the bridge lets you read and answer it from
+  **Discord** when you don't have your radio on you, plus a read-only mirror of MeshCore Public
+  (more platforms later). It can also make the node an MQTT observer for MC-Radar.
+- **SpArkKids** (SpArkKids1): firmware for the **LilyGO T-Deck Plus**: a simple touch messenger
   with location sharing for kids, or anyone in the household who doesn't like fancy tech. A
-  "dumb phone" without a service plan. Talks only to your SparkNode (and, if a parent allows it,
+  "dumb phone" without a service plan. Talks only to your SpArkNode (and, if a parent allows it,
   to MeshCore Public).
 
 ### Get started
@@ -23,13 +24,19 @@ Bluetooth range of it. Then, on macOS or Raspberry Pi OS:
 ```sh
 git clone https://github.com/kaperkunde/spark-core.git && cd spark-core
 ./setup.sh --dry-run    # see what it will ask and do, changes nothing
-./setup.sh              # choose SparkNode / Spark Bridge / SparkKids, answer, build, flash, install
+./setup.sh              # choose SpArkNode / SpArk Room Bridge / SpArkKids, answer, build, flash, install
 ```
 
 All settings (radio, names, passwords, PINs, Discord token) live in one gitignored `.env` file;
 [`.env.example`](.env.example) documents every key. Full guide: **[spark/README.md](spark/README.md)**.
 
-*Spark is not part of, or endorsed by, the MeshCore project. The original MeshCore README follows.*
+*Names: SpArk (the brand, with the Ark of the houseboat), SpArkNode, SpArkKids and SpArk Room
+Bridge are what you see. Technical identifiers keep the plain spelling so nothing breaks: the
+repository `spark-core`, the `spark-bridge` command and `spark_bridge` package, the `/spark`
+Discord commands, `SPARK_*` settings, PlatformIO environments (`SparkNode_P1`,
+`SparkKids_TDeckPlus`), the `SPARK-BUILD` marker and file names.*
+
+*SpArk is not part of, or endorsed by, the MeshCore project. The original MeshCore README follows.*
 
 ---
 

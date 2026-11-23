@@ -1,6 +1,6 @@
 #pragma once
 
-// SparkNode member directory (ROOM_MEMBER_DIR) and its wire protocol.
+// SpArkNode member directory (ROOM_MEMBER_DIR) and its wire protocol.
 //
 // Pure C++ (no Arduino), shared by the room server (examples/spark_room) and the
 // kids' client (examples/spark_kids), unit tested in test/test_spark_members.

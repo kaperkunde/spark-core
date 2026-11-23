@@ -15,7 +15,7 @@ from .config import ConfigError, load, load_env
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(
         prog="spark-bridge",
-        description="Spark Bridge: connect a SparkNode (MeshCore room server with HostLink) to Discord. "
+        description="SpArk Room Bridge: connect a SpArkNode (MeshCore room server with HostLink) to Discord. "
                     "Settings and DISCORD_TOKEN come from the repository's .env (see .env.example). "
                     "'spark-bridge update <zip>' updates the node over Bluetooth, 'spark-bridge scan' lists advertising nodes and bootloaders (see --help there).")
     ap.add_argument("--env", "-e", default=None,
@@ -24,7 +24,7 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--log-level", default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR"])
     ap.add_argument("--no-discord", action="store_true",
                     help="connect to the node and keep state, but do not start the Discord bot")
-    ap.add_argument("--version", action="version", version=f"SparkBridge{__version__} (spark-bridge {__version__})")
+    ap.add_argument("--version", action="version", version=f"SpArkBridge{__version__} (spark-bridge {__version__})")
     return ap
 
 
