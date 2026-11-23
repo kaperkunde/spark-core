@@ -170,6 +170,17 @@ exit codes: [host/README.md](../host/README.md#updating-the-node-over-bluetooth-
 `spark-bridge scan` lists what advertises (app or bootloader); a node that is connected to a
 host does not advertise.
 
+The transfer is slow (about 1.3 kB/s; a 391 KB package takes about 5 minutes), so the command
+reports as it goes: every line has a time stamp, five phases are announced as `[n/5]` with what
+normally happens and how long it takes, and while sending there is a line every 5 % or 15 s with
+rate (recent window), elapsed time and ETA, e.g.
+`12:09:41 transfer 45%  176k/391k bytes  1.31 kB/s  elapsed 2:14  ETA 2:44`. The end is either
+`Done: update finished in ..., verified build ...` or `FAILED in phase ... To resume: <command>`
+(for example `spark-bridge update <zip> --in-bootloader`). Redirect it to a file and tail that.
+`--status-file PATH` keeps a small JSON file (phase, step, pct, bytes, total, rate, eta_s,
+updated_at, state `running`/`done`/`failed`, resume_hint) current, written atomically, for scripts
+and agents that poll instead of parsing the log.
+
 **How it works.** `dfu` (USB console or the bridge link, never LoRa admin; `dfu force` skips
 the battery check) replies with the bootloader's Bluetooth address, closes the link, drops the
 bond hand-over data and resets into the bootloader's Bluetooth mode. Without a bond the

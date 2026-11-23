@@ -20,9 +20,12 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import collections
+import json
 import logging
 import os
 import re
+import shlex
 import shutil
 import signal
 import subprocess
@@ -63,12 +66,132 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--yes", "-y", action="store_true", help="do not ask for confirmation")
     ap.add_argument("--lock-timeout", type=float, default=60.0,
                     help="how long to wait for a running bridge to hand over the link")
+    ap.add_argument("--status-file", default="", metavar="PATH",
+                    help="keep a small JSON status file (phase, pct, rate, ETA, state) up to date, "
+                         "for scripts and agents that poll instead of reading the log")
     ap.add_argument("--log-level", default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR"])
     return ap
 
 
 def say(msg: str) -> None:
-    print(msg, flush=True)
+    print(f"{time.strftime('%H:%M:%S')} {msg}", flush=True)  # one line each, no \r: fine in a log file
+
+
+# --- progress reporting ---------------------------------------------------------------------------------
+
+STEPS = 5  # connect, dfu command, bootloader scan, transfer, verify
+PRINT_PCT, PRINT_SECONDS, RATE_WINDOW = 5, 15.0, 45.0
+TYPICAL_RATE = 1300.0  # bytes/s seen on the roof node (391 KB took about 5 minutes)
+
+
+def fmt_duration(sec: float | None) -> str:
+    if sec is None or sec < 0:
+        return "--:--"
+    sec = int(round(sec))
+    h, rem = divmod(sec, 3600)
+    return f"{h}:{rem // 60:02d}:{rem % 60:02d}" if h else f"{rem // 60}:{rem % 60:02d}"
+
+
+def fmt_progress(done: int, total: int, rate: float | None, elapsed: float) -> str:
+    """'transfer 45%  176k/391k bytes  1.31 kB/s  elapsed 2:14  ETA 2:44'"""
+    eta = (total - done) / rate if rate and rate > 0 else None
+    rate_s = f"{rate / 1000:.2f} kB/s" if rate else "-- kB/s"
+    return (f"transfer {done * 100 // max(total, 1)}%  {done // 1000}k/{total // 1000}k bytes  {rate_s}  "
+            f"elapsed {fmt_duration(elapsed)}  ETA {fmt_duration(eta)}")
+
+
+class Reporter:
+    """Phase lines, throttled transfer progress (every 5 % or 15 s), end summary, optional status file."""
+
+    def __init__(self, status_file: str = "", resume_base: str = "", clock=time.monotonic):
+        self.status_file, self.resume_base, self.clock = status_file, resume_base, clock
+        self.t_start = clock()
+        self.phase, self.step = "start", 0
+        self.bl_mac = ""
+        self.app_erased = False
+        self.build = ""
+        self._reset_transfer()
+        self.last = {}
+
+    def _reset_transfer(self) -> None:
+        self.samples: collections.deque = collections.deque()
+        self.t_transfer = self.clock()
+        self.next_pct, self.last_print = PRINT_PCT, self.clock()
+
+    def start_phase(self, step: int, phase: str, text: str) -> None:
+        self.step, self.phase = step, phase
+        say(f"[{step}/{STEPS}] {text}")
+        self._status("running", pct=0 if phase == "transfer" else None)
+
+    def rate(self) -> float | None:
+        """Bytes/s over the last RATE_WINDOW seconds (needs >= 2 s of data), else the overall average."""
+        if len(self.samples) < 2:
+            return None
+        (t0, d0), (t1, d1) = self.samples[0], self.samples[-1]
+        if t1 - t0 >= 2.0:
+            return (d1 - d0) / (t1 - t0)
+        return d1 / (t1 - self.t_transfer) if t1 - self.t_transfer >= 2.0 else None
+
+    def progress(self, done: int, total: int) -> None:
+        now = self.clock()
+        if self.samples and done < self.samples[-1][1]:  # a retry starts over
+            self._reset_transfer()
+        if not self.samples:
+            self.samples.append((self.t_transfer, 0))
+        self.samples.append((now, done))
+        while len(self.samples) > 2 and now - self.samples[1][0] > RATE_WINDOW:
+            self.samples.popleft()
+        pct = done * 100 // max(total, 1)
+        if pct >= self.next_pct or now - self.last_print >= PRINT_SECONDS:
+            self.next_pct = (pct // PRINT_PCT + 1) * PRINT_PCT
+            self.last_print = now
+            rate = self.rate()
+            say(fmt_progress(done, total, rate, now - self.t_transfer))
+            eta = (total - done) / rate if rate else None
+            self._status("running", pct=pct, bytes=done, total=total,
+                         rate=round(rate, 1) if rate else None, eta_s=round(eta) if eta is not None else None)
+
+    def resume_hint(self) -> str:
+        if self.phase == "verify":
+            return (f"the transfer finished; check what the node runs (spark-bridge scan, the bridge log), "
+                    f"and only if it still runs the old build: {self.resume_base} --force")
+        if self.app_erased or self.phase == "bootloader-scan":  # the node waits in its bootloader
+            addr = f" --bootloader-address {self.bl_mac}" if MAC_RE.match(self.bl_mac or "") else ""
+            return f"{self.resume_base}{'' if '--in-bootloader' in self.resume_base else ' --in-bootloader'}{addr}"
+        return self.resume_base
+
+    def finish(self, code: int) -> None:
+        total = self.clock() - self.t_start
+        if code == EXIT_OK:
+            rate = self.last.get("avg_rate")
+            avg = f", average {rate / 1000:.2f} kB/s" if rate else ""
+            say(f"Done: update finished in {fmt_duration(total)}{avg}, "
+                f"{'verified build ' + self.build if self.build else 'build not verified'}.")
+            self._status("done", pct=100)
+        else:
+            hint = self.resume_hint()
+            say(f"FAILED in phase '{self.phase}' [{self.step}/{STEPS}] after {fmt_duration(total)}. "
+                f"To resume: {hint}")
+            self._status("failed")
+
+    def _status(self, state: str, **kw) -> None:
+        if not self.status_file:
+            return
+        self.last.update({k: v for k, v in kw.items() if v is not None})
+        doc = {"phase": self.phase, "step": self.step, "steps": STEPS, "pct": None, "bytes": None,
+               "total": None, "rate": None, "eta_s": None, "state": state,
+               "resume_hint": self.resume_hint() if state == "failed" else "",
+               "build": self.build, "updated_at": time.strftime("%Y-%m-%dT%H:%M:%S%z")}
+        doc.update({k: v for k, v in self.last.items() if k in doc})
+        if state == "done":
+            doc["eta_s"] = 0
+        try:
+            tmp = f"{self.status_file}.tmp"
+            with open(tmp, "w") as f:
+                json.dump(doc, f)
+            os.replace(tmp, self.status_file)  # atomic: a poller never sees half a file
+        except OSError as exc:
+            log.warning("cannot write the status file: %s", exc)
 
 
 def parse_build(reply: str) -> str | None:
@@ -185,7 +308,7 @@ async def read_build(link: NodeLink) -> str | None:
     return parse_build(await link.cli("get build"))
 
 
-async def verify(cfg_node, pkg: dfu.Package, seconds: float) -> bool:
+async def verify(cfg_node, pkg: dfu.Package, seconds: float, rp: Reporter | None = None) -> bool:
     loop = asyncio.get_running_loop()
     end = loop.time() + seconds
     toggled = False
@@ -199,6 +322,8 @@ async def verify(cfg_node, pkg: dfu.Package, seconds: float) -> bool:
                 await link.close()
             if running == pkg.build:
                 say(f"Verified: the node runs {running}.")
+                if rp is not None:
+                    rp.build = running
                 return True
             say(f"The node runs {running!r}, expected {pkg.build!r}.")
             return False
@@ -219,6 +344,20 @@ async def verify(cfg_node, pkg: dfu.Package, seconds: float) -> bool:
 
 
 async def run(args) -> int:
+    parts = ["spark-bridge", "update", args.zip] + (["--env", args.env] if args.env else []) + ["--yes"]
+    if args.in_bootloader:
+        parts.append("--in-bootloader")
+    rp = Reporter(args.status_file, " ".join(shlex.quote(p) for p in parts))
+    try:
+        code = await _run(args, rp)
+    except BaseException:
+        rp.finish(EXIT_FAILED)
+        raise
+    rp.finish(code)
+    return code
+
+
+async def _run(args, rp: Reporter) -> int:
     try:
         cfg = load_env(args.env)
     except ConfigError as exc:
@@ -239,7 +378,7 @@ async def run(args) -> int:
         return EXIT_FAILED
     caff = keep_awake()
     try:
-        return await _run_locked(args, cfg, pkg)
+        return await _run_locked(args, cfg, pkg, rp)
     finally:
         lock.release()
         if caff is not None:
@@ -247,10 +386,16 @@ async def run(args) -> int:
         say("Link lock released (a running bridge reconnects by itself).")
 
 
-async def _run_locked(args, cfg, pkg: dfu.Package) -> int:
+async def _run_locked(args, cfg, pkg: dfu.Package, rp: Reporter) -> int:
     bl_mac = args.bootloader_address
+    rp.bl_mac = bl_mac
+    est = fmt_duration(len(pkg.image) / TYPICAL_RATE)
     app_mac = cfg.node.ble_address if MAC_RE.match(cfg.node.ble_address or "") else ""
-    if not args.in_bootloader:
+    if args.in_bootloader:
+        say(f"[1/{STEPS}] and [2/{STEPS}] skipped (--in-bootloader: the node already waits in its bootloader)")
+    else:
+        rp.start_phase(1, "connect", "connecting to the node over Bluetooth/USB, reading build and battery "
+                                     "(normally 5-20 s)")
         try:
             link = await node_session(cfg.node)
         except Exception as exc:  # noqa: BLE001
@@ -279,8 +424,11 @@ async def _run_locked(args, cfg, pkg: dfu.Package) -> int:
                 if ans not in ("y", "yes"):
                     say("Cancelled.")
                     return EXIT_FAILED
+            rp.start_phase(2, "dfu-command", "sending 'dfu': the node closes the link and resets into its "
+                                              "bootloader (normally 2-10 s)")
             reply = await link.cli("dfu force" if args.force else "dfu")
             bl_mac = dfu.parse_dfu_reply(reply)
+            rp.bl_mac = bl_mac
             say(f"Node: {reply.strip()}")
         except dfu.DfuError as exc:
             say(str(exc))
@@ -291,25 +439,26 @@ async def _run_locked(args, cfg, pkg: dfu.Package) -> int:
         finally:
             await link.close()  # also disconnects the bleak client: the node must not stay connected
 
+    attempts = [0]
+
     async def connect():
+        attempts[0] += 1
+        rp.start_phase(3, "bootloader-scan", f"waiting for bootloader {bl_mac or '(any DFU advertiser)'}"
+                                             f" (attempt {attempts[0]}; normally 5-30 s, up to {args.scan_seconds:.0f} s)")
         dev = await find_bootloader(bl_mac, args.scan_seconds)
         t = dfu.BleakTransport(dev)
         await t.connect()
+        rp.start_phase(4, "transfer", f"sending {len(pkg.image)} bytes; the old app is erased at the start. "
+                                      f"Typically ~{TYPICAL_RATE / 1000:.1f} kB/s, so about {est} "
+                                      f"(391 KB took ~5 min); lines every {PRINT_PCT}% or {PRINT_SECONDS:.0f} s")
+        rp._reset_transfer()
         return t
 
-    shown = [-1]
-
-    def progress(done: int, total: int) -> None:
-        tenth = done * 10 // total
-        if tenth != shown[0]:
-            shown[0] = tenth
-            say(f"  {done * 100 // total:3d}%  {done}/{total} bytes")
-
-    say(f"Looking for the bootloader{' ' + bl_mac if bl_mac else ''} ...")
     t0 = time.monotonic()
     try:
-        rev = await dfu.transfer(connect, pkg, attempts=args.attempts, progress=progress)
+        rev = await dfu.transfer(connect, pkg, attempts=args.attempts, progress=rp.progress)
     except dfu.DfuError as exc:
+        rp.app_erased = exc.app_erased
         say(f"Update failed: {exc}")
         if exc.app_erased:
             say("The node has NO application now. It is in its bootloader.")
@@ -320,13 +469,18 @@ async def _run_locked(args, cfg, pkg: dfu.Package) -> int:
             return EXIT_NO_APP
         say("The old application is intact (Reset sent). If the node does not come back, press reset once.")
         return EXIT_FAILED
-    say(f"Transfer done in {time.monotonic() - t0:.0f} s (bootloader {rev or 'unknown'}).")
+    took = time.monotonic() - t0
+    rp.last["avg_rate"] = len(pkg.image) / took if took > 0 else None
+    say(f"Transfer done in {took:.0f} s (bootloader {rev or 'unknown'}).")
     bluez_remove(bl_mac, app_mac)
     if args.no_verify or not pkg.build_id:
         say("Not verified (no build id in the package, or --no-verify).")
         return EXIT_OK
+    rp.start_phase(5, "verify", "the bootloader activates the new app, which boots; its BLE starts about 30 s "
+                                "later, then the build id is compared (normally 30-60 s, up to "
+                                f"{args.verify_seconds:.0f} s)")
     await asyncio.sleep(5)  # the app boots; BLE starts 30 s after boot
-    return EXIT_OK if await verify(cfg.node, pkg, args.verify_seconds) else EXIT_FAILED
+    return EXIT_OK if await verify(cfg.node, pkg, args.verify_seconds, rp) else EXIT_FAILED
 
 
 async def scan(seconds: float) -> list[tuple[str, str, str, int]]:
@@ -357,14 +511,16 @@ def scan_main(argv: list[str]) -> int:
     args = ap.parse_args(argv)
     rows = asyncio.run(scan(args.seconds))
     for kind, addr, name, rssi in rows:
-        say(f"{kind:10s} {addr:38s} {rssi:4d} dBm  {name}")
+        print(f"{kind:10s} {addr:38s} {rssi:4d} dBm  {name}")
     if not rows:
-        say("nothing advertising (a connected node does not advertise; is the bridge connected?)")
+        print("nothing advertising (a connected node does not advertise; is the bridge connected?)")
     return 0
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(line_buffering=True)  # redirected to a file: still one flushed line at a time
     logging.basicConfig(level=args.log_level, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     logging.getLogger("discord").setLevel(logging.WARNING)
     try:
