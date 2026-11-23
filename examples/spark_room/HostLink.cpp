@@ -28,6 +28,19 @@ static_assert(sizeof(FIRMWARE_VERSION) - 1 <= 20, "FIRMWARE_VERSION must fit the
 // The updater finds this string in a firmware image and compares it with `get build`.
 static const char SPARK_BUILD_TAG[] = "SPARK-BUILD " FIRMWARE_VERSION " " SPARK_BUILD_ID;
 
+// Patch releases (design, unused so far): FIRMWARE_VERSION must stay <= 20 bytes and
+// "v1.18.0-SparkNode1.3" already is 20, so a fix release keeps that label and sets
+// -D SPARK_RELEASE_PATCH=1 in variants/spark_p1/platformio.ini. `get spark` and `ver` then show
+// "v1.18.0-SparkNode1.3 (patch 1)", i.e. SparkNode1.3.1; the SPARK-BUILD id (git8-timestamp) tells builds apart anyway.
+// A patch release never changes the HostLink contract (that needs a minor version).
+#define SPARK_STR2(x) #x
+#define SPARK_STR(x) SPARK_STR2(x)
+#ifdef SPARK_RELEASE_PATCH
+  #define SPARK_RELEASE_SUFFIX " (patch " SPARK_STR(SPARK_RELEASE_PATCH) ")"
+#else
+  #define SPARK_RELEASE_SUFFIX ""
+#endif
+
 #define SPARK_PREFS_FILE   "/spark_hl"
 #define SPARK_PREFS_MAGIC  0x4C485053u   // "SPHL"
 
@@ -50,6 +63,7 @@ public:
   bool command(uint32_t sender_timestamp, const char* command, char* reply);
   void traceRecv(mesh::Packet* packet, uint32_t tag, uint32_t auth, uint8_t flags, const uint8_t* snrs,
                  const uint8_t* hashes, uint8_t path_len);
+  void rxRaw(float snr, float rssi, const uint8_t* raw, int len);
 
 private:
   // ---- spark prefs (InternalFS /spark_hl): u32 magic, u8 version, u32 ble_pin (0 = unset), u8 ble_enabled
@@ -79,6 +93,18 @@ private:
   char _cmd[hl::MAX_CHAN_TEXT + 1];
   char _reply[200];
 
+  // SparkNode1.3 per-session features (CMD_SPARK_HOST_FEATURES), per transport. Cleared by
+  // APP_START and whenever the transport is not connected, so a plain host never gets them.
+  uint8_t _features[NUM_TR] = { 0, 0 };
+  uint32_t _rxlog_sent = 0, _rxlog_dropped = 0;
+  uint8_t _rxbuf[hl::MAX_FRAME];
+  void cmdHostFeatures(int t, const uint8_t* f, size_t len);
+  // signing (upstream CMD_SIGN_*), one session at a time, JWT signing input only
+  uint8_t _sign_buf[hl::MAX_SIGN_DATA];
+  size_t _sign_len = 0;
+  int _sign_tr = -1;
+  void cmdSign(int t, const uint8_t* f, size_t len);
+
   // room posts: replay cursor (RAM only, reset by APP_START) and host-origin skip list
   uint32_t _post_cursor = 0;
   bool _suppress_push = false;
@@ -86,7 +112,9 @@ private:
   // Public channel: received messages wait in a RAM ring (oldest dropped, lost on reboot)
   struct ChanMsg {
     int8_t snr_x4;
+    int8_t rssi;
     uint8_t path_len;
+    uint8_t path[MAX_PATH_SIZE];   // hop hashes as received (pathByteCount(path_len) bytes)
     uint32_t timestamp;
     uint8_t text_len;
     char text[hl::MAX_CHAN_FRAME_TEXT];
@@ -206,6 +234,10 @@ void HostLink::loop() {
 #endif
   for (int t = 0; t < NUM_TR; t++) {
     if (!_tr[t]) continue;
+    if (!_tr[t]->isConnected()) {
+      _features[t] = 0;
+      if (_sign_tr == t) _sign_tr = -1;
+    }
     _tr[t]->loop();
     size_t n = _tr[t]->checkRecvFrame(_in);   // BLE also drains its send queue here
     if (n > 0) handleFrame(t, _in, n);
@@ -244,6 +276,10 @@ void HostLink::handleFrame(int t, const uint8_t* f, size_t len) {
     case CMD_SEND_CHANNEL_TXT_MSG: cmdSendChannel(t, f, len); break;
     case CMD_GET_CONTACTS:     cmdGetContacts(t, f, len); break;
     case CMD_SEND_TRACE_PATH:  cmdSendTrace(t, f, len); break;
+    case CMD_SPARK_HOST_FEATURES: cmdHostFeatures(t, f, len); break;
+    case CMD_SIGN_START:
+    case CMD_SIGN_DATA:
+    case CMD_SIGN_FINISH:      cmdSign(t, f, len); break;
     default:                   err(t, ERR_CODE_UNSUPPORTED_CMD); break;
   }
 }
@@ -251,6 +287,8 @@ void HostLink::handleFrame(int t, const uint8_t* f, size_t len) {
 void HostLink::cmdAppStart(int t, size_t len) {
   if (len < 8) { err(t, ERR_CODE_ILLEGAL_ARG); return; }
   _post_cursor = 0;   // replay every stored post
+  _features[t] = 0;   // a new session opts in again
+  if (_sign_tr == t) _sign_tr = -1;
   NodePrefs* p = _m->getNodePrefs();
   hl::SelfInfo s;
   memset(&s, 0, sizeof(s));
@@ -364,7 +402,10 @@ void HostLink::cmdSync(int t) {
   }
   if (_ring_count > 0) {
     const ChanMsg& c = _ring[(_ring_head + CHAN_RING - _ring_count) % CHAN_RING];   // oldest
-    send(t, hl::buildChannelMsg(_out, c.snr_x4, 0, c.path_len, c.timestamp, c.text, c.text_len));
+    if (_features[t] & HOST_FEATURE_CHANNEL_PATH)
+      send(t, hl::buildChannelMsgPath(_out, c.snr_x4, c.rssi, 0, c.path_len, c.timestamp, c.path, c.text, c.text_len));
+    else
+      send(t, hl::buildChannelMsg(_out, c.snr_x4, 0, c.path_len, c.timestamp, c.text, c.text_len));
     _ring_count--;
     return;
   }
@@ -384,7 +425,11 @@ void HostLink::groupRecv(mesh::Packet* packet, uint8_t type, uint8_t* data, size
   if ((data[4] >> 2) != 0) return;   // plain text only
   ChanMsg c;
   c.snr_x4 = (int8_t)(packet->getSNR() * 4);
+  c.rssi = (int8_t)radio_driver.getLastRSSI();
   c.path_len = packet->isRouteFlood() ? packet->path_len : 0xFF;
+  size_t pb = hl::pathByteCount(c.path_len);
+  if (pb > sizeof(c.path)) { pb = 0; c.path_len = packet->path_len & 0xC0; }   // malformed: no route
+  if (pb) memcpy(c.path, packet->path, pb);
   memcpy(&c.timestamp, data, 4);
   size_t tl = 0;
   while (5 + tl < len && data[5 + tl]) tl++;
@@ -429,6 +474,59 @@ void HostLink::cmdSendChannel(int t, const uint8_t* f, size_t len) {
   // sendFlood marks the packet as seen, so a repeater's copy is not delivered back to us
   _m->sendFloodScoped(_m->default_scope, pkt, 0, _m->getNodePrefs()->path_hash_mode + 1);
   ok(t);
+}
+
+// ---- SparkNode1.3: host features, raw RX feed, signing ----
+
+void HostLink::cmdHostFeatures(int t, const uint8_t* f, size_t len) {
+  uint32_t bits = 0;
+  if (!hl::parseHostFeatures(f, len, bits)) { err(t, ERR_CODE_ILLEGAL_ARG); return; }
+  _features[t] = (uint8_t)(bits & HOST_FEATURES_KNOWN);
+  send(t, hl::buildOkValue(_out, _features[t]));   // the bits this node enabled
+}
+
+// Dispatcher::logRxRaw: every packet the radio received, before parsing. Never blocks the radio:
+// a frame goes out only while the transport's send queue has room for replies too, otherwise
+// (or if the packet is larger than a frame) it is dropped and counted.
+void HostLink::rxRaw(float snr, float rssi, const uint8_t* raw, int len) {
+  if (!_m || len <= 0) return;
+  size_t n = 0;
+  bool built = false;
+  for (int t = 0; t < NUM_TR; t++) {
+    if (!(_features[t] & HOST_FEATURE_RX_LOG) || !_tr[t] || !_tr[t]->isConnected()) continue;
+    if (!built) {
+      n = hl::buildRxLog(_rxbuf, (int8_t)(snr * 4), (int8_t)rssi, raw, (size_t)len);
+      built = true;
+    }
+    if (n && !_tr[t]->isWriteBusy() && _tr[t]->writeFrame(_rxbuf, n) == n) _rxlog_sent++;
+    else _rxlog_dropped++;
+  }
+}
+
+// Upstream CMD_SIGN_START / SIGN_DATA / SIGN_FINISH, with a static buffer and one rule: only a JWT
+// signing input ("<b64url>.<b64url>") is signed, so a host can obtain an observer token signature
+// but never a signature over a mesh packet or advert. The private key never leaves the node.
+void HostLink::cmdSign(int t, const uint8_t* f, size_t len) {
+  if (f[0] == CMD_SIGN_START) {
+    _sign_tr = t;
+    _sign_len = 0;
+    send(t, hl::buildSignStart(_out, hl::MAX_SIGN_DATA));
+    return;
+  }
+  if (_sign_tr != t) { err(t, ERR_CODE_BAD_STATE); return; }
+  if (f[0] == CMD_SIGN_DATA) {
+    if (len < 2) { err(t, ERR_CODE_ILLEGAL_ARG); return; }
+    if (_sign_len + (len - 1) > sizeof(_sign_buf)) { _sign_tr = -1; err(t, ERR_CODE_TABLE_FULL); return; }
+    memcpy(&_sign_buf[_sign_len], &f[1], len - 1);
+    _sign_len += len - 1;
+    ok(t);
+    return;
+  }
+  _sign_tr = -1;   // SIGN_FINISH ends the session either way
+  if (!hl::isJwtSigningInput(_sign_buf, _sign_len)) { err(t, ERR_CODE_ILLEGAL_ARG); return; }
+  _out[0] = RESP_CODE_SIGNATURE;
+  _m->self_id.sign(&_out[1], _sign_buf, (int)_sign_len);
+  send(t, 1 + SIGNATURE_SIZE);
 }
 
 // ---- TRACE (path ping) ----
@@ -652,9 +750,11 @@ bool HostLink::command(uint32_t ts, const char* cmd, char* reply) {
 #ifdef ROOM_PERSIST_POSTS
     store = PostPersist::isOn();
 #endif
-    sprintf(reply, "> %s store:%s posts:%d chan:%d host:%s%s", FIRMWARE_VERSION, store ? "on" : "off", posts,
+    sprintf(reply, "> %s%s store:%s posts:%d chan:%d host:%s%s feat:%x/%x rxlog:%lu/%lu", FIRMWARE_VERSION,
+            SPARK_RELEASE_SUFFIX, store ? "on" : "off", posts,
             _ring_count, (_tr[TR_USB] && _tr[TR_USB]->isConnected()) ? "usb" : "-",
-            (_tr[TR_BLE] && _tr[TR_BLE]->isConnected()) ? ",ble" : "");
+            (_tr[TR_BLE] && _tr[TR_BLE]->isConnected()) ? ",ble" : "", _features[TR_USB], _features[TR_BLE],
+            (unsigned long)_rxlog_sent, (unsigned long)_rxlog_dropped);
   } else if (strcmp(cmd, "trace") == 0) {
     traceLine(reply, 150);
   } else if (strncmp(cmd, "trace ", 6) == 0) {
@@ -685,7 +785,7 @@ bool HostLink::command(uint32_t ts, const char* cmd, char* reply) {
   } else if (strcmp(cmd, "get build") == 0) {
     sprintf(reply, "> %s", SPARK_BUILD_TAG + 12);   // "<version> <build id>"; keeps the tag in the image
   } else if (strcmp(cmd, "ver") == 0) {
-    sprintf(reply, "%s (Build: %s) %s", FIRMWARE_VERSION, FIRMWARE_BUILD_DATE, SPARK_BUILD_ID);
+    sprintf(reply, "%s%s (Build: %s) %s", FIRMWARE_VERSION, SPARK_RELEASE_SUFFIX, FIRMWARE_BUILD_DATE, SPARK_BUILD_ID);
   } else {
     spark::DfuParse d = spark::parseDfuCommand(cmd);
     if (d == spark::DFU_CMD_NONE) return false;
@@ -783,6 +883,7 @@ bool hostlink_usb_byte(uint8_t c, bool line_empty) { return g_hostlink.usbByte(c
 void hostlink_loop() { g_hostlink.loop(); }
 void hostlink_post_stored() { g_hostlink.postStored(); }
 bool hostlink_command(uint32_t ts, char* cmd, char* reply) { return g_hostlink.command(ts, cmd, reply); }
+void hostlink_rx_raw(float snr, float rssi, const uint8_t* raw, int len) { g_hostlink.rxRaw(snr, rssi, raw, len); }
 void hostlink_note_name(const uint8_t* pubkey, const char* name) { g_hostlink.noteName(pubkey, name, 1, false, 0, 0); }
 
 #endif  // WITH_HOSTLINK

@@ -22,6 +22,9 @@ void hostlink_post_stored();
 // MyMesh::handleCommand(), before the common CLI. True if `command` was a spark command
 // (reply filled in).
 bool hostlink_command(uint32_t sender_timestamp, char* command, char* reply);
+// MyMesh::logRxRaw(): every received packet (raw bytes). Pushed as LOG_RX_DATA to hosts that
+// enabled HOST_FEATURE_RX_LOG; never blocks (dropped when the transport is busy).
+void hostlink_rx_raw(float snr, float rssi, const uint8_t* raw, int len);
 // Member directory: a member's name changed (GET_MEMBERS). Updates the name cache and pushes
 // NEW_ADVERT to an active host, as if the member's advert had been heard.
 void hostlink_note_name(const uint8_t* pubkey, const char* name);

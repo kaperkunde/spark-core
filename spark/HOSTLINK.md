@@ -104,7 +104,7 @@ post `BadPirate: Hallo` instead of `<node name>: BadPirate: Hallo`:
 | `set ble on` / `set ble off` | any admin | enable/disable BLE; takes effect at once when BLE is running (kill switch). BLE starts 30 s after boot |
 | `get ble` | any | enabled, running, connected, pin set |
 | `ble unpair` | any admin | clear bonds, disconnect |
-| `get spark` | any | version, store on/off, posts, queued channel messages, active hosts |
+| `get spark` | any | version, store on/off, posts, queued channel messages, active hosts; SparkNode1.3 adds `feat:<usb>/<ble>` (enabled host feature bits per transport, hex) and `rxlog:<sent>/<dropped>` (LOG_RX_DATA frames since boot) |
 | `trace <hex>[,<hex>...]` | any | send a direct TRACE through the listed repeaters (hash prefixes of 1, 2 or 4 bytes, all the same size, up to 6 hops); `OK - trace sent tag=XXXXXXXX`. The result is also printed on USB serial |
 | `trace` | any | last trace: tag, then per hop `<hash> X.XdB` (SNR at which that hop heard the previous sender), then `back X.XdB rssi=N` (the return as this node heard it); or `pending`, `timeout (no reply after 30 s)`, `none` |
 | `get names [start]` | any | advert-name cache (32 entries, newest first): 8 hex pubkey prefix and name; `more: get names N` continues. Use the first 2, 4 or 8 hex digits as a trace hop |
@@ -143,3 +143,71 @@ room puts that name into the HostLink name cache as if the member's advert had b
 shows in `get names` and GET_CONTACTS and is pushed as NEW_ADVERT to an active host. The cache
 is also seeded with every directory name after boot. The bridge additionally reads `members` at
 link-up and when an unknown author posts (at most every 5 minutes).
+
+## Amendment: observer feed, channel routes and signing (SparkNode1.3)
+
+Three additions. A host that never sends `CMD_SPARK_HOST_FEATURES` sees exactly the SparkNode1.2
+behaviour: no new pushes, no new reply codes.
+
+**Host features (per session, opt-in)**
+
+| Code | Name | Payload after code byte | Reply |
+|---|---|---|---|
+| `0xC0` (192) | SPARK_HOST_FEATURES | u32 feature bits wanted (a single u8 is accepted too) | OK with value: `00`, u32 bits enabled (unknown bits are cleared). Firmware before 1.3 answers ERR code 1: the host then keeps the 1.2 behaviour |
+
+Bits: `0x01` RX_LOG, `0x02` CHANNEL_PATH. The bits belong to the transport the command arrived on;
+they are cleared by APP_START on that transport and whenever it disconnects (BLE link loss, USB
+idle for 120 s), so a host enables them again after every connect. Nothing is stored in flash.
+
+**RX_LOG: push `0x88` LOG_RX_DATA** (upstream companion layout, unchanged, so the `meshcore`
+library's `RX_LOG_DATA` event and existing tools parse it): `88`, i8 SNR x4, i8 RSSI dBm, the raw
+received packet (header byte, transport codes if any, path length, path, payload) exactly as on
+air. One frame per packet the radio received with a valid CRC (before dedup, so flood repeats from
+several neighbours each appear), including packets the node later ignores.
+- No timestamp in the frame (as upstream): frames are pushed from the radio loop at once or not at
+  all, so the host's receive time is the packet's time within the link latency (< 1 s).
+- Never blocks the radio: a frame is queued only while the transport's send queue is below
+  two thirds (BLE queue 12 frames), otherwise it is dropped and counted (`get spark` `rxlog:`).
+- Packets larger than 173 bytes (176 minus the 3 header bytes) are dropped and counted, as
+  upstream does. These are rare: long channel texts with long 2-byte paths.
+
+**CHANNEL_PATH: channel messages with route, reply `0xC1`.** With this bit, SYNC_NEXT_MESSAGE
+serves a queued channel message as `RESP_CODE_SPARK_CHANNEL_MSG` instead of CHANNEL_MSG_RECV_V3:
+
+```
+c1 | i8 SNR x4 | i8 RSSI | u8 channel idx | u8 path_len (as V3) | u8 txt_type=0 | u32 sender ts
+   | u8 n | path[n] | text "<sender name>: <message>" (rest of the frame)
+```
+
+`path_len` is the packed byte from the packet (`ff` direct; else top 2 bits hash size - 1, low 6
+bits hop count). `path` is the hop hashes as received, first repeater first, the last entry is the
+neighbour this node heard. `n` is normally hops x hash size; the text is never cut for the route,
+so if both do not fit 176 bytes only whole leading hops are kept (`n` smaller than expected).
+
+**Signing (upstream companion commands).** So a host can authenticate the node as an MQTT
+observer (token signed with the node's Ed25519 identity) without the private key leaving the node:
+
+| Code | Name | Payload | Reply |
+|---|---|---|---|
+| 33 | SIGN_START | none | SIGN_START (19): u8 0, u32 max length = 512. Starts a session on this transport (drops any earlier one) |
+| 34 | SIGN_DATA | data chunk | OK; ERR 4 without a session on this transport, ERR 3 over 512 bytes (session ends) |
+| 35 | SIGN_FINISH | none | SIGNATURE (20): 64-byte Ed25519 signature by the node identity; ERR 6 if the data is not a JWT signing input; ERR 4 without a session |
+
+Rule: the node only signs a JWT signing input, `<base64url>.<base64url>` (characters `A-Z a-z 0-9
+- _`, exactly one `.`, both parts non-empty). Mesh packets and adverts never have that form, so a
+host cannot obtain a signature it could replay on the mesh. The `meshcore` library's
+`commands.sign()` works unchanged.
+
+**Golden vectors (SparkNode1.3)**
+- V11 push LOG_RX_DATA, SNR 5.0, RSSI -95, raw `1501aabb`: `8814a11501aabb`
+- V12 reply SPARK_CHANNEL_MSG "Bob: hi", SNR 5.0, RSSI -95, 2 hops of 2 bytes `a1b2`, `c3d4`:
+  `c114a100420000f1536504a1b2c3d4426f623a206869`
+- V13 host->node SPARK_HOST_FEATURES RX_LOG|CHANNEL_PATH: `c003000000`, reply `0003000000`
+- V14 SIGN_START reply: `130000020000`
+
+**Version labels.** DEVICE_INFO carries `v1.18.0-SparkNode1.3` (the 20-byte limit). A bug-fix
+release that does not change this contract keeps that label and is marked by
+`-D SPARK_RELEASE_PATCH=<n>` (shown by `ver` and `get spark` as `(patch n)`, i.e. SparkNode1.3.n);
+the SPARK-BUILD id tells builds apart in any case. Anything that changes the contract is a new
+minor version (SparkNode1.4). A host compares (major, minor) only; the old development label
+`SparkNode2` (no dot) is treated as older than 1.0.

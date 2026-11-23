@@ -77,6 +77,28 @@ size_t buildRoomPost(uint8_t* out, const uint8_t room_prefix6[6], uint32_t post_
 size_t buildChannelMsg(uint8_t* out, int8_t snr_x4, uint8_t chan_idx, uint8_t path_len, uint32_t sender_ts,
                        const char* text, size_t text_len);
 
+// ---- SparkNode1.3 extensions ----
+// Number of hop-hash bytes a packed path_len byte stands for (0xFF = direct = 0 bytes).
+size_t pathByteCount(uint8_t path_len);
+// PUSH_CODE_LOG_RX_DATA, upstream companion layout: 0x88, i8 snr x4, i8 rssi, raw packet bytes.
+// 0 if the packet does not fit one frame (raw_len > MAX_FRAME - 3): the caller drops it.
+size_t buildRxLog(uint8_t* out, int8_t snr_x4, int8_t rssi, const uint8_t* raw, size_t raw_len);
+// RESP_CODE_SPARK_CHANNEL_MSG: 0xC1, i8 snr x4, i8 rssi, u8 chan idx, u8 path_len (packed, as V3),
+// u8 txt_type (0), u32 sender ts, u8 n (path bytes that follow), path[n], text. The text is never
+// cut for the path: if both do not fit, only whole leading hops are kept (n < pathByteCount).
+size_t buildChannelMsgPath(uint8_t* out, int8_t snr_x4, int8_t rssi, uint8_t chan_idx, uint8_t path_len,
+                           uint32_t sender_ts, const uint8_t* path, const char* text, size_t text_len);
+// CMD_SPARK_HOST_FEATURES: 0xC0, u32 requested feature bits. False if malformed.
+bool parseHostFeatures(const uint8_t* f, size_t len, uint32_t& bits);
+// OK carrying a u32 value (00 + u32), as upstream; used for the enabled feature bits.
+size_t buildOkValue(uint8_t* out, uint32_t value);
+// Signing (upstream CMD_SIGN_*). The node only signs a JWT signing input: two non-empty
+// base64url segments joined by one '.', nothing else (so it can never be made to sign a mesh
+// packet or an advert). MAX_SIGN_DATA bytes at most.
+static const size_t MAX_SIGN_DATA = 512;
+bool isJwtSigningInput(const uint8_t* data, size_t len);
+size_t buildSignStart(uint8_t* out, uint32_t max_len);
+
 // ---- command parsers (payload includes the code byte) ----
 // SEND_CHANNEL_TXT_MSG: code, txt_type, chan_idx, u32 timestamp, text[, 0x00, sender name].
 // The optional trailer (SparkNode1.2) is everything after the first NUL in the text field, up to

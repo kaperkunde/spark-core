@@ -464,4 +464,82 @@ size_t formatNames(char* out, size_t cap, const Contact* names, const bool* used
   return at;
 }
 
+// ---- SparkNode1.3 extensions ----
+
+size_t pathByteCount(uint8_t path_len) {
+  if (path_len == 0xFF) return 0;
+  return (size_t)(path_len & 0x3F) * ((path_len >> 6) + 1);
+}
+
+size_t buildRxLog(uint8_t* out, int8_t snr_x4, int8_t rssi, const uint8_t* raw, size_t raw_len) {
+  if (raw_len == 0 || raw_len + 3 > MAX_FRAME) return 0;
+  out[0] = PUSH_CODE_LOG_RX_DATA;
+  out[1] = (uint8_t)snr_x4;
+  out[2] = (uint8_t)rssi;
+  memcpy(&out[3], raw, raw_len);
+  return 3 + raw_len;
+}
+
+size_t buildChannelMsgPath(uint8_t* out, int8_t snr_x4, int8_t rssi, uint8_t chan_idx, uint8_t path_len,
+                           uint32_t sender_ts, const uint8_t* path, const char* text, size_t text_len) {
+  size_t i = 0;
+  out[i++] = RESP_CODE_SPARK_CHANNEL_MSG;
+  out[i++] = (uint8_t)snr_x4;
+  out[i++] = (uint8_t)rssi;
+  out[i++] = chan_idx;
+  out[i++] = path_len;
+  out[i++] = 0;   // txt_type plain
+  put32(&out[i], sender_ts); i += 4;
+  size_t room = MAX_FRAME - i - 1;
+  if (text_len > room) text_len = truncUtf8(text, text_len, room);
+  size_t n = path ? pathByteCount(path_len) : 0;
+  size_t hop = (path_len == 0xFF) ? 1 : (size_t)((path_len >> 6) + 1);
+  if (n > room - text_len) n = (room - text_len) / hop * hop;   // keep whole leading hops
+  out[i++] = (uint8_t)n;
+  if (n) { memcpy(&out[i], path, n); i += n; }
+  if (text_len) { memcpy(&out[i], text, text_len); i += text_len; }
+  return i;
+}
+
+bool parseHostFeatures(const uint8_t* f, size_t len, uint32_t& bits) {
+  if (len < 2 || f[0] != CMD_SPARK_HOST_FEATURES) return false;
+  bits = f[1];
+  if (len >= 5) bits = get32(&f[1]);
+  return true;
+}
+
+size_t buildOkValue(uint8_t* out, uint32_t value) {
+  out[0] = RESP_CODE_OK;
+  put32(&out[1], value);
+  return 5;
+}
+
+static bool isB64Url(uint8_t c) {
+  return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' || c == '_';
+}
+
+bool isJwtSigningInput(const uint8_t* data, size_t len) {
+  if (!data || len < 3 || len > MAX_SIGN_DATA) return false;
+  size_t dots = 0, seg = 0;
+  for (size_t i = 0; i < len; i++) {
+    if (data[i] == '.') {
+      if (seg == 0) return false;   // empty segment
+      dots++;
+      seg = 0;
+    } else if (isB64Url(data[i])) {
+      seg++;
+    } else {
+      return false;
+    }
+  }
+  return dots == 1 && seg > 0;
+}
+
+size_t buildSignStart(uint8_t* out, uint32_t max_len) {
+  out[0] = RESP_CODE_SIGN_START;
+  out[1] = 0;   // reserved
+  put32(&out[2], max_len);
+  return 6;
+}
+
 }  // namespace hl

@@ -16,9 +16,14 @@
 #define CMD_DEVICE_QUERY              22
 #define CMD_GET_CHANNEL               31
 #define CMD_SET_CHANNEL               32
+#define CMD_SIGN_START                33
+#define CMD_SIGN_DATA                 34
+#define CMD_SIGN_FINISH               35
 #define CMD_SEND_TRACE_PATH           36
 #define CMD_GET_STATS                 56
 #define CMD_RUN_CLI_COMMAND           66
+// Spark extension (SparkNode1.3): per-session opt-in features, see HOSTLINK.md
+#define CMD_SPARK_HOST_FEATURES       0xC0
 
 // stats sub-types for CMD_GET_STATS
 #define STATS_TYPE_CORE               0
@@ -40,11 +45,17 @@
 #define RESP_CODE_CONTACT_MSG_RECV_V3 16
 #define RESP_CODE_CHANNEL_MSG_RECV_V3 17
 #define RESP_CODE_CHANNEL_INFO        18
+#define RESP_CODE_SIGN_START          19
+#define RESP_CODE_SIGNATURE           20
 #define RESP_CODE_STATS               24
 #define RESP_CODE_CLI_REPLY           29
+// Spark extension (SparkNode1.3): channel message with SNR, RSSI and the route (hop hashes);
+// only sent to a host that enabled HOST_FEATURE_CHANNEL_PATH
+#define RESP_CODE_SPARK_CHANNEL_MSG   0xC1
 
 // node -> host pushes
 #define PUSH_CODE_MSG_WAITING         0x83
+#define PUSH_CODE_LOG_RX_DATA         0x88
 #define PUSH_CODE_TRACE_DATA          0x89
 #define PUSH_CODE_NEW_ADVERT          0x8A
 
@@ -54,6 +65,11 @@
 #define ERR_CODE_BAD_STATE            4
 #define ERR_CODE_FILE_IO_ERROR        5
 #define ERR_CODE_ILLEGAL_ARG          6
+
+// CMD_SPARK_HOST_FEATURES bits
+#define HOST_FEATURE_RX_LOG           0x01   // push LOG_RX_DATA (0x88) for every received packet
+#define HOST_FEATURE_CHANNEL_PATH     0x02   // SYNC_NEXT_MESSAGE serves channel messages as 0xC1
+#define HOST_FEATURES_KNOWN           0x03
 
 // HostLink protocol code reported in DEVICE_INFO
 #define HOSTLINK_FIRMWARE_VER_CODE    14

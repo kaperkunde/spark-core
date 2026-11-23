@@ -642,3 +642,89 @@ TEST(Trace, FormatNames) {
   formatNames(b, sizeof b, c, none, 4, 0);
   EXPECT_STREQ("> no names heard yet", b);
 }
+
+// ---- SparkNode1.3: raw RX feed, channel route, host features, signing input ----
+
+TEST(Spark13, PathByteCount) {
+  EXPECT_EQ(0u, pathByteCount(0xFF));          // direct
+  EXPECT_EQ(0u, pathByteCount(0x00));          // flood, heard from the sender
+  EXPECT_EQ(3u, pathByteCount(0x03));          // 3 hops, 1-byte hashes
+  EXPECT_EQ(4u, pathByteCount(0x42));          // 2 hops, 2-byte hashes
+  EXPECT_EQ(9u, pathByteCount(0x83));          // 3 hops, 3-byte hashes
+}
+
+// V11: LOG_RX_DATA, SNR 5.0 (x4 = 20), RSSI -95, raw packet 15 01 aa bb
+TEST(Spark13, V11_RxLog) {
+  uint8_t out[MAX_FRAME];
+  const uint8_t raw[] = {0x15, 0x01, 0xaa, 0xbb};
+  size_t n = buildRxLog(out, 20, -95, raw, sizeof(raw));
+  EXPECT_EQ("8814a11501aabb", hex(out, n));
+}
+
+TEST(Spark13, RxLogTooBigIsDropped) {
+  uint8_t out[MAX_FRAME];
+  uint8_t raw[255] = {0};
+  EXPECT_EQ(MAX_FRAME, buildRxLog(out, 0, 0, raw, MAX_FRAME - 3));
+  EXPECT_EQ(0u, buildRxLog(out, 0, 0, raw, MAX_FRAME - 2));
+  EXPECT_EQ(0u, buildRxLog(out, 0, 0, raw, 0));
+}
+
+// V12: channel message with route: "Bob: hi", SNR 5.0, RSSI -95, 2 hops of 2 bytes a1b2 c3d4
+TEST(Spark13, V12_ChannelMsgPath) {
+  uint8_t out[MAX_FRAME];
+  const uint8_t path[] = {0xa1, 0xb2, 0xc3, 0xd4};
+  size_t n = buildChannelMsgPath(out, 20, -95, 0, 0x42, TS, path, "Bob: hi", 7);
+  EXPECT_EQ("c114a100420000f1536504a1b2c3d4426f623a206869", hex(out, n));
+}
+
+TEST(Spark13, ChannelMsgPathDirectHasNoPath) {
+  uint8_t out[MAX_FRAME];
+  size_t n = buildChannelMsgPath(out, 0, -50, 0, 0xFF, TS, nullptr, "A: b", 4);
+  EXPECT_EQ(11u + 4u, n);
+  EXPECT_EQ(0, out[10]);
+}
+
+TEST(Spark13, ChannelMsgPathKeepsTextAndWholeHops) {
+  uint8_t out[MAX_FRAME];
+  uint8_t path[64];
+  for (int i = 0; i < 64; i++) path[i] = (uint8_t)i;
+  std::string text(160, 'x');
+  // 20 hops of 2 bytes (40 bytes) + 160 text does not fit 176: whole hops are dropped, not text
+  size_t n = buildChannelMsgPath(out, 0, 0, 0, 0x40 | 20, TS, path, text.data(), text.size());
+  EXPECT_LE(n, MAX_FRAME);
+  uint8_t np = out[10];
+  EXPECT_EQ(0, np % 2);
+  EXPECT_EQ(11u + np + 160u, n);
+  EXPECT_EQ(text, std::string((const char*)&out[11 + np], 160));
+}
+
+TEST(Spark13, HostFeatures) {
+  uint32_t bits = 0;
+  auto f = unhex("c003000000");
+  ASSERT_TRUE(parseHostFeatures(f.data(), f.size(), bits));
+  EXPECT_EQ(3u, bits);
+  auto g = unhex("c0");
+  EXPECT_FALSE(parseHostFeatures(g.data(), g.size(), bits));
+  uint8_t out[MAX_FRAME];
+  EXPECT_EQ("0003000000", hex(out, buildOkValue(out, 3)));
+  EXPECT_EQ("130000020000", hex(out, buildSignStart(out, 512)));
+}
+
+TEST(Spark13, JwtSigningInputOnly) {
+  auto ok = [](const char* s) { return isJwtSigningInput((const uint8_t*)s, strlen(s)); };
+  EXPECT_TRUE(ok("eyJhbGciOiJFZDI1NTE5IiwidHlwIjoiSldUIn0.eyJwdWJsaWNLZXkiOiJBMSJ9"));
+  EXPECT_TRUE(ok("a-_.b"));
+  EXPECT_FALSE(ok("abc"));            // no dot
+  EXPECT_FALSE(ok("a.b.c"));          // a whole token, not a signing input
+  EXPECT_FALSE(ok(".b"));
+  EXPECT_FALSE(ok("a."));
+  EXPECT_FALSE(ok("a=.b"));           // padding is not base64url as JWT uses it
+  EXPECT_FALSE(ok("a b.c"));
+  const uint8_t bin[] = {0x01, 0x2e, 0x02};
+  EXPECT_FALSE(isJwtSigningInput(bin, 3));
+  std::string big(MAX_SIGN_DATA, 'a');
+  big[10] = '.';
+  EXPECT_TRUE(isJwtSigningInput((const uint8_t*)big.data(), big.size()));
+  big += "a";
+  EXPECT_FALSE(isJwtSigningInput((const uint8_t*)big.data(), big.size()));
+}
