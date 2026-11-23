@@ -15,6 +15,8 @@ from dataclasses import dataclass, field
 from datetime import time
 from pathlib import Path
 
+from .observer import ObserverConfig, ObserverError, parse_brokers
+
 
 class ConfigError(Exception):
     pass
@@ -78,6 +80,8 @@ class Config:
     discord: DiscordConfig = field(default_factory=DiscordConfig)
     limits: LimitsConfig = field(default_factory=LimitsConfig)
     health: HealthConfig = field(default_factory=HealthConfig)
+    observer: ObserverConfig = field(default_factory=ObserverConfig)
+    observer_password: str = ""   # value of the variable named by observer.password_env
     db_path: str = "spark-bridge.db"
     allow_dangerous_cli: bool = False
     discord_token: str = ""
@@ -116,7 +120,7 @@ def _fill(obj, data: dict, section: str) -> None:
 
 def parse(data: dict, config_dir: Path = Path(".")) -> Config:
     cfg = Config(config_dir=config_dir)
-    known = {"node", "discord", "limits", "health", "state", "allow_dangerous_cli"}
+    known = {"node", "discord", "limits", "health", "state", "observer", "allow_dangerous_cli"}
     for key in data:
         if key not in known:
             raise ConfigError(f"unknown section or key: {key}")
@@ -128,6 +132,16 @@ def parse(data: dict, config_dir: Path = Path(".")) -> Config:
         if k in h:
             h[k] = _hhmm(h[k], f"[health] {k}")
     _fill(cfg.health, h, "health")
+    _fill(cfg.observer, data.get("observer", {}), "observer")
+    if isinstance(cfg.observer.brokers, str):
+        cfg.observer.brokers = _list(cfg.observer.brokers)
+    if cfg.observer.enabled:
+        if not cfg.observer.iata.strip():
+            raise ConfigError("[observer] iata (region code, e.g. AMS) is required when the observer is on")
+        try:
+            parse_brokers(cfg.observer)
+        except ObserverError as exc:
+            raise ConfigError(f"[observer] {exc}") from exc
     state = data.get("state", {})
     if "db_path" in state:
         cfg.db_path = state["db_path"]
@@ -161,6 +175,8 @@ def load(path: str | Path, env: bool = True) -> Config:
     if env:
         load_dotenv(cfg.config_dir / ".env")
         cfg.discord_token = os.environ.get("DISCORD_TOKEN", "")
+        if cfg.observer.password_env:
+            cfg.observer_password = os.environ.get(cfg.observer.password_env, "")
     db = Path(cfg.db_path)
     if not db.is_absolute():
         cfg.db_path = str(cfg.config_dir / db)
@@ -168,6 +184,10 @@ def load(path: str | Path, env: bool = True) -> Config:
 
 
 # --- .env -----------------------------------------------------------------------------------
+
+def _list(value: str) -> list[str]:
+    return [x.strip() for x in value.split(",") if x.strip()]
+
 
 def _ids(value: str) -> list[int]:
     return [int(x) for x in value.replace(" ", "").split(",") if x]
@@ -207,6 +227,20 @@ ENV_KEYS: dict[str, tuple[str, str, object]] = {
     "BRIDGE_HEALTH_SAMPLE_MINUTES": ("health", "sample_minutes", int),
     "BRIDGE_DB_PATH": ("state", "db_path", str),
     "BRIDGE_ALLOW_DANGEROUS_CLI": ("", "allow_dangerous_cli", _bool),
+    # MQTT observer (see observer.py and host/README.md)
+    "BRIDGE_OBSERVER": ("observer", "enabled", _bool),
+    "BRIDGE_OBSERVER_BROKERS": ("observer", "brokers", _list),
+    "BRIDGE_OBSERVER_IATA": ("observer", "iata", str),
+    "BRIDGE_OBSERVER_NAME": ("observer", "name", str),
+    "BRIDGE_OBSERVER_OWNER": ("observer", "owner", str),
+    "BRIDGE_OBSERVER_EMAIL": ("observer", "email", str),
+    "BRIDGE_OBSERVER_AUTH": ("observer", "auth", str),
+    "BRIDGE_OBSERVER_USERNAME": ("observer", "username", str),
+    "BRIDGE_OBSERVER_PASSWORD_ENV": ("observer", "password_env", str),
+    "BRIDGE_OBSERVER_WS_PATH": ("observer", "ws_path", str),
+    "BRIDGE_OBSERVER_TLS_VERIFY": ("observer", "tls_verify", _bool),
+    "BRIDGE_OBSERVER_TOKEN_MINUTES": ("observer", "token_minutes", int),
+    "BRIDGE_OBSERVER_QUEUE": ("observer", "queue_size", int),
 }
 
 
@@ -248,6 +282,8 @@ def from_env(values: dict[str, str], config_dir: Path = Path(".")) -> Config:
         data.setdefault("node", {})["ble_name"] = values["SPARK_NODE_NAME"]
     cfg = parse(data, config_dir)
     cfg.discord_token = values.get("DISCORD_TOKEN", "")
+    if cfg.observer.password_env:
+        cfg.observer_password = values.get(cfg.observer.password_env, "")
     return cfg
 
 
@@ -270,6 +306,9 @@ def load_env(path: str | Path | None = None, environ: dict[str, str] | None = No
     for key in list(ENV_KEYS) + ["DISCORD_TOKEN", "SPARK_NODE_NAME"]:
         if env.get(key):
             values[key] = env[key]
+    pw_env = values.get("BRIDGE_OBSERVER_PASSWORD_ENV", "")
+    if pw_env and env.get(pw_env):
+        values[pw_env] = env[pw_env]
     cfg = from_env(values, p.resolve().parent)
     db = Path(cfg.db_path)
     if not db.is_absolute():

@@ -195,6 +195,7 @@ class NodeLink:
         self.rx_log = None  # callable(RxPacket), sync
         self.features = 0
         self.rx_frames = 0
+        self.radio = ""  # "freq,bw,sf,cr" from SELF_INFO (observer status)
 
     # --- identity ------------------------------------------------------------
     @property
@@ -302,6 +303,9 @@ class NodeLink:
             ev = await self._cmd(mc.commands.send_appstart(timeout=self.cfg.command_timeout))
             self.pubkey = ev.payload.get("public_key", "")
             self.node_name = ev.payload.get("name", "") or self.node_name
+            pl = ev.payload
+            if pl.get("radio_freq"):
+                self.radio = f"{pl['radio_freq']:g},{pl.get('radio_bw', 0):g},{pl.get('radio_sf', 0)},{pl.get('radio_cr', 0)}"
             ev = await self._cmd(mc.commands.send_device_query())
             self.version = ev.payload.get("ver", "")
             if "spark" not in self.version.lower():
@@ -377,6 +381,7 @@ class NodeLink:
         owned by this process (it then never advertises again). So disconnect it explicitly.
         """
         self.connected = False
+        self.features = 0
         mc, self.mc = self.mc, None
         bleak, self._bleak = self._bleak, None
         if mc is not None:

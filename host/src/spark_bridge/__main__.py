@@ -60,7 +60,28 @@ async def run(cfg, use_discord: bool) -> int:
     bridge.health = health
     node.handlers = bridge
 
+    observer = None
+    if cfg.observer.enabled:
+        from .observer import Observer
+        try:
+            import aiomqtt  # noqa: F401
+        except ImportError:
+            logging.getLogger("spark_bridge").error("observer on, but aiomqtt is not installed: pip install -e host")
+            store.close()
+            return 2
+        from .observer import ObserverError
+        try:
+            observer = Observer(cfg.observer, node, password=cfg.observer_password)
+        except ObserverError as exc:
+            logging.getLogger("spark_bridge").error("observer: %s", exc)
+            store.close()
+            return 2
+        node.rx_log = observer.on_rx   # asks the node for the raw RX feed at every connect
+        bridge.observer = observer
+
     tasks = [asyncio.create_task(node.run(), name="node")]
+    if observer:
+        tasks.append(asyncio.create_task(observer.run(), name="observer"))
     if client:
         client.bridge = bridge
         tasks.append(asyncio.create_task(client.start(cfg.discord_token), name="discord"))
@@ -80,6 +101,13 @@ async def run(cfg, use_discord: bool) -> int:
     waiter = asyncio.create_task(stop.wait())
     done, _ = await asyncio.wait([waiter, *tasks], return_when=asyncio.FIRST_COMPLETED)
     node.stop()
+    if observer:
+        observer.stop()   # publishes "offline" on connected brokers
+        obs_task = next(t for t in tasks if t.get_name() == "observer")
+        try:
+            await asyncio.wait_for(asyncio.shield(obs_task), 5)
+        except (asyncio.TimeoutError, Exception):  # noqa: BLE001
+            pass
     code = 0
     for t in done:
         if t is not waiter and not t.cancelled() and t.exception():

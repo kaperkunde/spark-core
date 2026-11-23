@@ -11,6 +11,7 @@ dependencies = [
     "meshcore==2.3.19",
     "discord.py>=2.4,<3",
     "tzdata",
+    "aiomqtt>=2.3,<3",   # MQTT observer (only imported when it is enabled)
 ]
 
 [project.optional-dependencies]

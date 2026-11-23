@@ -97,8 +97,8 @@ def build_contact(code: int, pubkey: bytes, name: str, adv_type: int = 1, ts: in
             + le32(ts) + struct.pack("<ii", 0, 0) + le32(lastmod))
 
 
-def build_self_info(name: str = "SparkNode") -> bytes:
-    return (bytes([SELF_INFO, 3, 22, 22]) + OWN_PUBKEY + struct.pack("<ii", 0, 0) + bytes([0, 0, 0, 0])
+def build_self_info(name: str = "SparkNode", pubkey: bytes = OWN_PUBKEY) -> bytes:
+    return (bytes([SELF_INFO, 3, 22, 22]) + pubkey + struct.pack("<ii", 0, 0) + bytes([0, 0, 0, 0])
             + le32(869525) + le32(250000) + bytes([11, 5]) + name.encode())
 
 
@@ -141,7 +141,8 @@ class StubNode:
         self.rx_pushed = 0
         self._sign: bytearray | None = None
         from Crypto.PublicKey import ECC
-        self.sign_key = ECC.generate(curve="ed25519")  # the stub's identity for SIGN_* (not OWN_PUBKEY)
+        self.sign_key = ECC.generate(curve="ed25519")  # signs SIGN_* requests
+        self.pubkey = OWN_PUBKEY   # use_sign_key() makes SELF_INFO carry the signing key instead
         self.contacts: list[tuple[bytes, str, int]] = []
         self.cli_replies = {"get repeat": "> on", "ver": "v1.18.0-SparkNode1"}
         # test hooks
@@ -188,6 +189,10 @@ class StubNode:
     @property
     def sign_pubkey(self) -> bytes:
         return self.sign_key.public_key().export_key(format="raw")
+
+    def use_sign_key(self) -> None:
+        """Identity = the signing key, so signatures verify against SELF_INFO's public key."""
+        self.pubkey = self.sign_pubkey
 
     @property
     def connected(self) -> bool:
@@ -290,7 +295,7 @@ class StubNode:
             self._sign = None
             self.cursor = 0
             self.skip.clear()
-            out = [build_self_info(self.name)]
+            out = [build_self_info(self.name, self.pubkey)]
             if self._waiting():
                 out.append(bytes([PUSH_MSG_WAITING]))
             return out
@@ -341,10 +346,10 @@ class StubNode:
                 return [err(6)]
             if p[1] != 0:
                 return [err(1)]
-            if p[7:13] != OWN_PUBKEY[:6]:
+            if p[7:13] != self.pubkey[:6]:
                 return [err(2)]
             text = cut_utf8(p[13:].decode(errors="ignore"), 151)
-            self.posts.append(Post(self.now(), OWN_PUBKEY[:4], text))
+            self.posts.append(Post(self.now(), self.pubkey[:4], text))
             self.skip.add(len(self.posts) - 1)
             self.room_pushed.append(text)
             return [bytes([SENT, 0]) + le32(0) + le32(0)]
@@ -359,7 +364,7 @@ class StubNode:
             if i is not None:
                 self.cursor = i + 1
                 post = self.posts[i]
-                return [build_room_post(post.author4, post.text, post.ts)]
+                return [build_room_post(post.author4, post.text, post.ts, self.pubkey[:6])]
             if self.ring:
                 text, ts, snr, rssi, plen, path = self.ring.popleft()
                 if self.features & 2:

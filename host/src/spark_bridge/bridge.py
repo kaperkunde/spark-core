@@ -308,6 +308,8 @@ class Bridge:
     async def on_poll(self, sample: dict[str, Any]) -> None:
         if self.health:
             self.health.record(sample)
+        if self.observer:
+            self.observer.record_sample(sample)
 
     # ------------------------------------------------------------------ mesh -> Discord
     def _remember(self, text: str) -> None:

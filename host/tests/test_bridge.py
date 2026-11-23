@@ -674,3 +674,14 @@ async def test_closed_discord_session_is_quiet(env, caplog):
         await b.on_link_down()
         await b.on_channel_msg(ChannelMsg(9, "Bob: late"))
     assert not [r for r in caplog.records if r.levelno >= logging.ERROR]
+
+
+def test_status_shows_the_observer(env):
+    b, *_ = env
+
+    class Obs:
+        def summary(self): return "on, region AMS, raw RX feed on, 12 packets; dutchmeshcore-1 connected"
+
+    assert "MQTT observer" not in b.status(READ)
+    b.observer = Obs()
+    assert "MQTT observer: on, region AMS" in b.status(READ)
