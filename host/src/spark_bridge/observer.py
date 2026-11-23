@@ -268,7 +268,18 @@ class Observer:
             st.put(payload)
 
     def record_sample(self, sample: dict[str, Any]) -> None:
-        self.sample = dict(sample)
+        self.sample = {**self.sample, **sample}
+
+    async def refresh_stats(self) -> None:
+        """Fresh core/radio/packet stats from the node, right before an online status (best effort)."""
+        for name in ("stats", "packet_stats"):
+            fn = getattr(self.node, name, None)
+            if fn is None:
+                continue
+            try:
+                self.sample.update(await fn())
+            except Exception as exc:  # noqa: BLE001 (a link hiccup must not end the publisher)
+                log.debug("observer: %s unavailable: %s", name, exc)
 
     # ---- status ---------------------------------------------------------------------------
     def status_message(self, status: str) -> str:
@@ -282,10 +293,15 @@ class Observer:
             msg["radio"] = radio
         s = self.sample
         if status == "online" and s:
-            msg["stats"] = {k2: s[k] for k, k2 in (("battery_mv", "battery_mv"), ("uptime_secs", "uptime_secs"),
-                                                    ("errors", "debug_flags"), ("queue_len", "queue_len"),
-                                                    ("noise_floor", "noise_floor"), ("tx_air_secs", "tx_air_secs"),
-                                                    ("rx_air_secs", "rx_air_secs")) if k in s}
+            # same key names as meshcore-packet-capture (meshcore_py STATS_CORE/RADIO/PACKETS payloads)
+            keys = ("battery_mv", "uptime_secs", "errors", "queue_len", "noise_floor", "last_rssi", "last_snr",
+                    "tx_air_secs", "rx_air_secs", "recv", "sent", "flood_tx", "direct_tx", "flood_rx",
+                    "direct_rx", "recv_errors")
+            stats = {k: s[k] for k in keys if s.get(k) is not None}
+            if "recv" in stats:
+                stats["packets_received"], stats["packets_sent"] = stats["recv"], stats["sent"]
+            if stats:
+                msg["stats"] = stats
         return json.dumps(msg, separators=(",", ":"))
 
     def summary(self) -> str:
@@ -402,7 +418,11 @@ class Observer:
             delay = min(delay * 2, 300.0)
 
     async def _serve(self, st: BrokerState, client) -> None:
-        await client.publish(self.topic("status"), self.status_message("online"), qos=0, retain=True)
+        await self.refresh_stats()
+        online = self.status_message("online")
+        log.info("observer %s: online status %d bytes, stats keys: %s", st.broker.name, len(online),
+                 ",".join(json.loads(online).get("stats", {})) or "none")
+        await client.publish(self.topic("status"), online, qos=0, retain=True)
         next_status = self._clock() + self.cfg.status_minutes * 60
         next_stats = self._clock() + 300
         exp = self.token_expiry(st.broker)
@@ -421,6 +441,7 @@ class Observer:
                          st.broker.name, st.sent, st.dropped, len(st.queue), ago)
                 next_stats = self._clock() + 300
             if self._clock() >= next_status:
+                await self.refresh_stats()
                 await client.publish(self.topic("status"), self.status_message("online"), qos=0, retain=True)
                 next_status = self._clock() + self.cfg.status_minutes * 60
             st.wake.clear()
