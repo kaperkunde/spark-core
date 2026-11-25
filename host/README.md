@@ -40,6 +40,14 @@ The older `--config config.toml` format still works.
   System Settings > Privacy & Security; a launchd agent cannot ask for it.
 - **Raspberry Pi**: `bluetoothctl`, then `scan on`, `pair <MAC>`, enter the PIN, `trust <MAC>`,
   `quit`. Put the MAC in `BRIDGE_BLE_ADDRESS` or rely on the name.
+- **Choosing the adapter (Linux)**: with more than one Bluetooth adapter (say a USB dongle for SpArk
+  and the onboard chip for Home Assistant) set `BRIDGE_BLE_ADAPTER=hci1` (legacy toml:
+  `[node] ble_adapter = "hci1"`), or pass `--ble-adapter hci1` to `spark-bridge`,
+  `spark-bridge update` and `spark-bridge scan`. Prefer the adapter's MAC address
+  (`BRIDGE_BLE_ADAPTER=AA:BB:CC:DD:EE:FF`, see `bluetoothctl list`): hciN numbering can change at
+  reboot. A MAC is resolved through BlueZ (`busctl`, then `hciconfig`). Empty = system default;
+  macOS ignores the setting (logged once). Pair the node with that adapter (in `bluetoothctl`:
+  `list`, `select <MAC>`, then `pair`). Needs bleak 3.x (`bluez={"adapter": ...}`).
 - To change the PIN: `tools/set-ble-pin.sh /dev/ttyACM0` (over USB; prompts silently). Then re-pair.
 
 ### Services
