@@ -60,6 +60,12 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--bootloader-address", default="",
                     help="with --in-bootloader: only use this address (Linux MAC, or macOS with use_bdaddr)")
     ap.add_argument("--attempts", type=int, default=3, help="transfer attempts (default 3)")
+    ap.add_argument("--prn", type=int, default=dfu.PRN, choices=range(1, dfu.MAX_PRN + 1), metavar="N",
+                    help=f"packets per receipt (1..{dfu.MAX_PRN}, default {dfu.PRN}; the bootloader runs out "
+                         "of buffers above 8, so lower it only for a bad link)")
+    ap.add_argument("--packet-size", type=int, default=0, metavar="BYTES",
+                    help="bytes per data packet: 0 (default) = as large as the negotiated ATT MTU allows, up to "
+                         f"{dfu.MAX_PACKET_SIZE}; 20 = legacy packets. A retry after a failure always uses 20")
     ap.add_argument("--scan-seconds", type=float, default=30.0, help="how long to look for the bootloader")
     ap.add_argument("--verify-seconds", type=float, default=120.0, help="how long to wait for the new app")
     ap.add_argument("--no-verify", action="store_true", help="do not reconnect to check the build id")
@@ -456,7 +462,8 @@ async def _run_locked(args, cfg, pkg: dfu.Package, rp: Reporter) -> int:
 
     t0 = time.monotonic()
     try:
-        rev = await dfu.transfer(connect, pkg, attempts=args.attempts, progress=rp.progress)
+        rev = await dfu.transfer(connect, pkg, attempts=args.attempts, prn=args.prn,
+                                   packet_size=args.packet_size, progress=rp.progress)
     except dfu.DfuError as exc:
         rp.app_erased = exc.app_erased
         say(f"Update failed: {exc}")

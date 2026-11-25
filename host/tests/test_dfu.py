@@ -118,6 +118,8 @@ class FakeDevice:
         self.start_status = start_status
         self.crc_fail = crc_fail
         self.receipt_count_offset = receipt_count_offset
+        self.link_payload = 20  # ATT MTU - 3 the fake link reports
+        self.packet_sizes = []  # data packet sizes seen, per session
         self._new_session()
 
     def _new_session(self):
@@ -149,6 +151,7 @@ class FakeDevice:
 class FakeTransport:
     def __init__(self, dev: FakeDevice):
         self.dev = dev
+        self.max_packet_size = getattr(dev, "link_payload", 20)
         self.cb = None
         self.connected = False
 
@@ -237,6 +240,7 @@ class FakeTransport:
         elif d.pkt_mode == "data" and d.state == "rx":
             idx = d.npackets
             d.npackets += 1
+            d.packet_sizes.append(len(data))
             if d.lose_link_at is not None and len(d.data) >= d.lose_link_at:
                 d.lose_link_at = None
                 self.connected = False  # link loss: the bootloader re-advertises, same session
@@ -384,3 +388,46 @@ async def test_dirty_session_stock_bootloader_is_not_reset():
     with pytest.raises(DfuError, match="broke off") as ei:
         await run(dev, pkg_of(), attempts=3)
     assert ei.value.app_erased and bytes([6]) not in dev.writes
+
+
+async def test_large_packets_when_the_link_allows_and_prn_counts_packets():
+    pkg = pkg_of(4004)
+    dev = FakeDevice()
+    dev.link_payload = 244
+    await run(dev, pkg)
+    assert dev.app == pkg.image
+    assert set(dev.packet_sizes[:-1]) == {244} and dev.packet_sizes[-1] == 4004 % 244
+    assert all(n % 4 == 0 for n in dev.packet_sizes)
+
+
+def test_choose_packet_size():
+    assert dfu.choose_packet_size(0, 247 - 3) == 244
+    assert dfu.choose_packet_size(0, 23 - 3) == 20
+    assert dfu.choose_packet_size(0, 0) == 20
+    assert dfu.choose_packet_size(0, 512) == 244  # never above what the bootloader takes
+    assert dfu.choose_packet_size(100, 244) == 100
+    assert dfu.choose_packet_size(101, 244) == 100  # multiple of 4
+    assert dfu.choose_packet_size(20, 244) == 20
+    assert dfu.choose_packet_size(-5, 244) == 244 and dfu.choose_packet_size(7, 244) == 20
+
+
+async def test_retry_after_failure_falls_back_to_legacy_packets():
+    pkg = pkg_of(4000)
+    dev = FakeDevice(spark=True, lose_link_at=1000)
+    dev.link_payload = 244
+    await run(dev, pkg)
+    assert dev.app == pkg.image
+    # first session: large packets until the link broke; the retry (fresh session): 20 bytes
+    assert 244 in dev.packet_sizes and dev.packet_sizes[-1] == 20 and dev.packet_sizes.count(20) > 100
+
+
+async def test_explicit_packet_size_and_prn_validation():
+    pkg = pkg_of(4000)
+    dev = FakeDevice()
+    dev.link_payload = 244
+    await run(dev, pkg, packet_size=20)
+    assert set(dev.packet_sizes) == {20}
+    for bad in (0, 9, 16):
+        with pytest.raises(ValueError):
+            dfu.DfuSession(FakeTransport(FakeDevice()), pkg, prn=bad)
+    await run(FakeDevice(), pkg, prn=1)

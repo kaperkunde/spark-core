@@ -44,8 +44,21 @@ IMAGE_APPLICATION = 0x04
 STATUS = {1: "success", 2: "invalid state", 3: "not supported", 4: "data size exceeds limit", 5: "CRC error",
           6: "operation failed"}
 
-PACKET_SIZE = 20
-PRN = 8  # the bootloader README: 8 or less, or it runs out of buffers
+PACKET_SIZE = 20  # legacy DFU packet, always valid (default ATT MTU 23)
+# The Adafruit bootloader negotiates the ATT MTU (BLEGATT_ATT_MTU_MAX 247, rounded to 4n+3 so the
+# payload is a multiple of 4) and its DFU packet characteristic takes up to 244 bytes; its receive
+# buffers are 16 x 600 bytes, counted per packet, not per byte.
+MAX_PACKET_SIZE = 244
+PRN = 8  # the bootloader README: 8 or less, or it runs out of buffers (16-buffer queue, and the
+# receipt is sent when a packet is queued for flash, not when it is written: two windows in flight)
+MAX_PRN = 8
+
+
+def choose_packet_size(requested: int, available: int) -> int:
+    """Data packet size: `requested` (0 = as large as the link allows), at most what the link
+    carries (`available`, ATT MTU - 3) and the bootloader takes, a multiple of 4, at least 20."""
+    size = min(requested if requested > 0 else MAX_PACKET_SIZE, available or PACKET_SIZE, MAX_PACKET_SIZE)
+    return max(PACKET_SIZE, size - size % 4)
 
 # SpArkNode limits (variants/spark_p1/platformio.ini): app region 0x27000..0xD4000; above it the
 # erase would reach the room post store.
@@ -173,6 +186,8 @@ class Transport(Protocol):
     async def start_notify(self, callback: Callable[[bytes], None]) -> None: ...
     async def write_control(self, data: bytes) -> None: ...  # write with response
     async def write_packet(self, data: bytes) -> None: ...  # write without response
+    # optional: `max_packet_size` (int property, bytes per write without response on this link);
+    # a transport without it gets 20-byte packets
 
 
 class BleakTransport:
@@ -222,6 +237,15 @@ class BleakTransport:
     async def write_packet(self, data: bytes) -> None:
         await self.client.write_gatt_char(DFU_PACKET, data, response=False)
 
+    @property
+    def max_packet_size(self) -> int:
+        """Largest write without response on this link (negotiated ATT MTU - 3); 20 if unknown."""
+        try:
+            return max(PACKET_SIZE, int(self.client.mtu_size) - 3)
+        except Exception as exc:  # noqa: BLE001
+            log.debug("no ATT MTU: %s", exc)
+            return PACKET_SIZE
+
 
 # --- protocol -------------------------------------------------------------------------------------
 
@@ -237,11 +261,14 @@ class Timeouts:
 class DfuSession:
     """One attempt on one connection: Start .. Activate. Raises DfuError on any failure."""
 
-    def __init__(self, transport: Transport, pkg: Package, *, prn: int = PRN, timeouts: Timeouts | None = None,
-                 progress: Callable[[int, int], None] | None = None):
+    def __init__(self, transport: Transport, pkg: Package, *, prn: int = PRN, packet_size: int = 0,
+                 timeouts: Timeouts | None = None, progress: Callable[[int, int], None] | None = None):
+        if not 1 <= prn <= MAX_PRN:
+            raise ValueError(f"PRN must be 1..{MAX_PRN} (the bootloader runs out of buffers above that)")
         self.t = transport
         self.pkg = pkg
         self.prn = prn
+        self.packet_size = packet_size  # requested; 0 = largest the link allows, 20 = legacy
         self.to = timeouts or Timeouts()
         self.progress = progress
         self.started = False  # Start accepted: from here on the old app is erased
@@ -312,7 +339,9 @@ class DfuSession:
         await self.t.write_control(struct.pack("<BH", OP_PRN_REQ, self.prn))
         await self.t.write_control(bytes([OP_RECEIVE]))
 
-        packets = [img[i:i + PACKET_SIZE] for i in range(0, len(img), PACKET_SIZE)]
+        size = choose_packet_size(self.packet_size, getattr(self.t, "max_packet_size", PACKET_SIZE))
+        log.info("data packets of %d bytes, receipt every %d packets (%d bytes)", size, self.prn, size * self.prn)
+        packets = [img[i:i + size] for i in range(0, len(img), size)]
         sent = 0
         for n, chunk in enumerate(packets, 1):
             if not self.t.is_connected:
@@ -363,7 +392,7 @@ class DfuSession:
 
 
 async def transfer(connect: Callable[[], Awaitable[Transport]], pkg: Package, *, attempts: int = 3,
-                   prn: int = PRN, timeouts: Timeouts | None = None, progress=None,
+                   prn: int = PRN, packet_size: int = 0, timeouts: Timeouts | None = None, progress=None,
                    sleep: Callable[[float], Awaitable[None]] = asyncio.sleep, reboot_wait: float = 4.0) -> str:
     """Run DfuSession with the retry policy and return the bootloader revision.
 
@@ -383,7 +412,10 @@ async def transfer(connect: Callable[[], Awaitable[Transport]], pkg: Package, *,
         failed = True
         try:
             t = await connect()
-            s = DfuSession(t, pkg, prn=prn, timeouts=timeouts, progress=progress)
+            # a retry always uses the legacy 20-byte packets: if large packets were the problem,
+            # the retry must not hit it again
+            s = DfuSession(t, pkg, prn=prn, packet_size=packet_size if attempt == 1 else PACKET_SIZE,
+                           timeouts=timeouts, progress=progress)
             await s.run()
             failed = False
             return s.revision
