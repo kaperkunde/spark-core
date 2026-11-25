@@ -38,6 +38,7 @@ from typing import Any, Protocol
 
 from meshcore import EventType, MeshCore
 
+from .bleadapter import AdapterError, bleak_args
 from .config import NodeConfig
 
 log = logging.getLogger("spark_bridge.node")
@@ -230,6 +231,10 @@ class NodeLink:
             # No PIN: pairing is done once at OS level. An address without ':' is matched as a
             # substring of the BLE name ("SparkNode" matches "MeshCore-SparkNode").
             dev = None
+            try:
+                akw = bleak_args(c.ble_adapter)
+            except AdapterError as exc:
+                raise LinkError(str(exc)) from exc
             if self._direct_turn():
                 # A peripheral that is already connected does not advertise, so a scan cannot
                 # see it (stale CoreBluetooth/BlueZ connection). Ask the OS for it instead, but
@@ -239,6 +244,12 @@ class NodeLink:
                 if dev is not None:
                     lvl = logging.INFO if self._fail_streak == c.ble_direct_after else logging.DEBUG
                     log.log(lvl, "scans found nothing; trying the OS-connected peripheral %s", dev)
+            if dev is None and akw:
+                # meshcore's own scan always uses the default adapter: scan on the chosen one and
+                # hand over the device (a BlueZ BLEDevice remembers its adapter).
+                dev = await self._scan_adapter(akw)
+                if dev is None:
+                    raise LinkError(f"no node found on adapter {c.ble_adapter}")
             if dev is not None:
                 mc = await MeshCore.create_ble(device=dev, **kw)
             else:
@@ -248,6 +259,23 @@ class NodeLink:
         self._bleak = getattr(getattr(mc, "connection_manager", None), "connection", None)
         self._bleak = getattr(self._bleak, "client", None)
         return mc
+
+    async def _scan_adapter(self, akw: dict):
+        """Scan on the configured adapter for the node (same matching as meshcore's own scan)."""
+        from bleak import BleakScanner
+
+        c = self.cfg
+        want = (c.ble_address or "").lower()
+
+        def match(d, adv):
+            name = adv.local_name or d.name or ""
+            if want and ":" in want:
+                return (d.address or "").lower() == want
+            if not name.startswith("MeshCore"):
+                return False
+            return (want or c.ble_name or "") in name
+
+        return await BleakScanner.find_device_by_filter(match, timeout=10.0, **akw)
 
     def _direct_turn(self) -> bool:
         """BLE: use the OS-connected peripheral on this attempt (failure streak N, N+3, N+6, ...)."""
@@ -261,7 +289,7 @@ class NodeLink:
         try:
             from bleak import BleakAdapter
 
-            adapter = await asyncio.wait_for(BleakAdapter.get(), 10)
+            adapter = await asyncio.wait_for(BleakAdapter.get(**bleak_args(c.ble_adapter)), 10)
             devices = await asyncio.wait_for(adapter.get_connected_devices([NUS_SERVICE_UUID]), 10)
         except Exception as exc:  # noqa: BLE001
             log.debug("connected-device lookup failed: %s", exc)

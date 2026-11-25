@@ -193,8 +193,9 @@ class Transport(Protocol):
 class BleakTransport:
     """Transport over bleak, for a BLEDevice or address found by the caller."""
 
-    def __init__(self, device, *, timeout: float = 20.0):
+    def __init__(self, device, *, timeout: float = 20.0, adapter: str = ""):
         self.device = device
+        self.adapter = adapter  # "" = default; hciN or adapter MAC (Linux only)
         self.timeout = timeout
         self.client = None
         self._lost = asyncio.Event()
@@ -203,8 +204,11 @@ class BleakTransport:
         from bleak import BleakClient
 
         self._lost.clear()
+        from .bleadapter import bleak_args
+
         self.client = BleakClient(self.device, timeout=self.timeout,
-                                  disconnected_callback=lambda _c: self._lost.set())
+                                  disconnected_callback=lambda _c: self._lost.set(),
+                                  **bleak_args(self.adapter))
         await self.client.connect()
         if self.client.services.get_characteristic(DFU_CONTROL) is None:
             await self.disconnect()

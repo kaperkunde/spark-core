@@ -33,7 +33,8 @@ import sys
 import time
 
 from . import dfu
-from .config import ConfigError, load_env
+from .bleadapter import ADAPTER_HELP, AdapterError, bleak_args, resolve_adapter
+from .config import ConfigError, check_adapter, load_env
 from .lock import LinkLock, lock_path_for
 from .nodelink import LinkError, NodeLink
 
@@ -59,6 +60,7 @@ def build_parser() -> argparse.ArgumentParser:
                          "the app steps and transfer to the AdaDFU device that advertises")
     ap.add_argument("--bootloader-address", default="",
                     help="with --in-bootloader: only use this address (Linux MAC, or macOS with use_bdaddr)")
+    ap.add_argument("--ble-adapter", default=None, metavar="hciN|MAC", help=ADAPTER_HELP)
     ap.add_argument("--attempts", type=int, default=3, help="transfer attempts (default 3)")
     ap.add_argument("--prn", type=int, default=dfu.PRN, choices=range(1, dfu.MAX_PRN + 1), metavar="N",
                     help=f"packets per receipt (1..{dfu.MAX_PRN}, default {dfu.PRN}; the bootloader runs out "
@@ -231,12 +233,12 @@ def lock_help() -> str:
 
 # --- bootloader discovery -------------------------------------------------------------------------------
 
-async def find_bootloader(address: str, timeout: float):
+async def find_bootloader(address: str, timeout: float, adapter: str = ""):
     """The BLEDevice of a live DFU-bootloader advertisement. With a MAC address (Linux, or macOS
     when bleak can report real addresses) only that device; otherwise exactly one advertiser."""
     from bleak import BleakScanner
 
-    kw = {}
+    kw = dict(bleak_args(adapter))
     if sys.platform == "darwin":
         kw["cb"] = {"use_bdaddr": True}
     found: dict[str, object] = {}
@@ -366,7 +368,14 @@ async def run(args) -> int:
 async def _run(args, rp: Reporter) -> int:
     try:
         cfg = load_env(args.env)
+        if args.ble_adapter is not None:
+            cfg.node.ble_adapter = check_adapter(args.ble_adapter)
     except ConfigError as exc:
+        say(f"config error: {exc}")
+        return EXIT_CONFIG
+    try:
+        resolve_adapter(cfg.node.ble_adapter)  # fail early on an unknown adapter MAC
+    except AdapterError as exc:
         say(f"config error: {exc}")
         return EXIT_CONFIG
     try:
@@ -451,8 +460,8 @@ async def _run_locked(args, cfg, pkg: dfu.Package, rp: Reporter) -> int:
         attempts[0] += 1
         rp.start_phase(3, "bootloader-scan", f"waiting for bootloader {bl_mac or '(any DFU advertiser)'}"
                                              f" (attempt {attempts[0]}; normally 5-30 s, up to {args.scan_seconds:.0f} s)")
-        dev = await find_bootloader(bl_mac, args.scan_seconds)
-        t = dfu.BleakTransport(dev)
+        dev = await find_bootloader(bl_mac, args.scan_seconds, cfg.node.ble_adapter)
+        t = dfu.BleakTransport(dev, adapter=cfg.node.ble_adapter)
         await t.connect()
         rp.start_phase(4, "transfer", f"sending {len(pkg.image)} bytes; the old app is erased at the start. "
                                       f"Typically ~{TYPICAL_RATE / 1000:.1f} kB/s, so about {est} "
@@ -490,12 +499,13 @@ async def _run_locked(args, cfg, pkg: dfu.Package, rp: Reporter) -> int:
     return EXIT_OK if await verify(cfg.node, pkg, args.verify_seconds, rp) else EXIT_FAILED
 
 
-async def scan(seconds: float) -> list[tuple[str, str, str, int]]:
+async def scan(seconds: float, adapter: str = "") -> list[tuple[str, str, str, int]]:
     """Passive scan: every SpArkNode-related advertiser as (kind, address, name, rssi), where kind
     is "app" (Nordic UART service) or "bootloader" (DFU service). Read-only."""
     from bleak import BleakScanner
 
     kw = {"cb": {"use_bdaddr": True}} if sys.platform == "darwin" else {}
+    kw.update(bleak_args(adapter))
     seen: dict[str, tuple[str, str, str, int]] = {}
 
     def on_adv(device, adv):
@@ -515,8 +525,20 @@ def scan_main(argv: list[str]) -> int:
                                  description="Passive BLE scan: SpArkNode app (NUS) and DFU bootloader advertisers. "
                                              "A node connected to a host does not advertise.")
     ap.add_argument("--seconds", type=float, default=15.0)
+    ap.add_argument("--ble-adapter", default=None, metavar="hciN|MAC", help=ADAPTER_HELP)
     args = ap.parse_args(argv)
-    rows = asyncio.run(scan(args.seconds))
+    adapter = args.ble_adapter
+    try:
+        if adapter is None:
+            try:
+                adapter = load_env(None).node.ble_adapter  # the same .env as the bridge, if there is one
+            except (ConfigError, OSError):
+                adapter = ""
+        adapter = check_adapter(adapter)
+        rows = asyncio.run(scan(args.seconds, adapter))
+    except (ConfigError, AdapterError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
     for kind, addr, name, rssi in rows:
         print(f"{kind:10s} {addr:38s} {rssi:4d} dBm  {name}")
     if not rows:

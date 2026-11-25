@@ -9,7 +9,8 @@ import signal
 import sys
 
 from . import __version__
-from .config import ConfigError, load, load_env
+from .bleadapter import ADAPTER_HELP
+from .config import ConfigError, check_adapter, load, load_env
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -22,6 +23,7 @@ def build_parser() -> argparse.ArgumentParser:
                     help="path to the .env file (default: $SPARK_ENV_FILE, ./.env, or the repository's .env)")
     ap.add_argument("--config", "-c", default=None, help="legacy: a config.toml instead of .env")
     ap.add_argument("--log-level", default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR"])
+    ap.add_argument("--ble-adapter", default=None, metavar="hciN|MAC", help=ADAPTER_HELP)
     ap.add_argument("--no-discord", action="store_true",
                     help="connect to the node and keep state, but do not start the Discord bot")
     ap.add_argument("--version", action="version", version=f"SpArkBridge{__version__} (spark-bridge {__version__})")
@@ -136,6 +138,8 @@ def main(argv: list[str] | None = None) -> int:
     logging.getLogger("discord").setLevel(logging.WARNING)
     try:
         cfg = load(args.config) if args.config else load_env(args.env)
+        if args.ble_adapter is not None:
+            cfg.node.ble_adapter = check_adapter(args.ble_adapter)
     except ConfigError as exc:
         print(f"config error: {exc}", file=sys.stderr)
         return 2

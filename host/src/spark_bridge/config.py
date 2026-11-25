@@ -10,6 +10,7 @@ There is deliberately no BLE PIN key: pairing happens once at OS level.
 from __future__ import annotations
 
 import os
+import re
 import tomllib
 from dataclasses import dataclass, field
 from datetime import time
@@ -18,8 +19,19 @@ from pathlib import Path
 from .observer import ObserverConfig, ObserverError, parse_brokers
 
 
+_MAC = re.compile(r"^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$")
+
+
 class ConfigError(Exception):
     pass
+
+
+def check_adapter(value: str) -> str:
+    """Validate a ble_adapter setting (hciN or a MAC; empty = default) and return it trimmed."""
+    ad = (value or "").strip()
+    if ad and not (ad.lower().startswith("hci") and ad[3:].isdigit()) and not _MAC.match(ad):
+        raise ConfigError("ble_adapter must be hciN (e.g. hci1) or an adapter MAC address")
+    return ad
 
 
 @dataclass
@@ -27,6 +39,9 @@ class NodeConfig:
     transport: str = "ble"  # ble | serial | tcp
     ble_name: str = "SparkNode"  # substring of the BLE name ("MeshCore-SparkNode")
     ble_address: str = ""  # optional; wins over ble_name when set
+    # Linux/BlueZ only: which Bluetooth adapter to use, "hci1" or its MAC address (hciN numbers can
+    # change at reboot; the MAC cannot). Empty = the system default. Ignored on macOS.
+    ble_adapter: str = ""
     serial_port: str = ""
     tcp_host: str = "127.0.0.1"
     tcp_port: int = 5000
@@ -153,6 +168,7 @@ def parse(data: dict, config_dir: Path = Path(".")) -> Config:
         raise ConfigError("[node] serial_port is required for transport = serial")
     if cfg.node.transport == "ble" and not (cfg.node.ble_name or cfg.node.ble_address):
         raise ConfigError("[node] ble_name or ble_address is required for transport = ble")
+    cfg.node.ble_adapter = check_adapter(cfg.node.ble_adapter)
     cfg.discord.allowed_guild_ids = [int(g) for g in cfg.discord.allowed_guild_ids]
     try:
         from zoneinfo import ZoneInfo
@@ -207,6 +223,7 @@ ENV_KEYS: dict[str, tuple[str, str, object]] = {
     "BRIDGE_TRANSPORT": ("node", "transport", str),
     "BRIDGE_BLE_NAME": ("node", "ble_name", str),
     "BRIDGE_BLE_ADDRESS": ("node", "ble_address", str),
+    "BRIDGE_BLE_ADAPTER": ("node", "ble_adapter", str),
     "BRIDGE_SERIAL_PORT": ("node", "serial_port", str),
     "BRIDGE_TCP_HOST": ("node", "tcp_host", str),
     "BRIDGE_TCP_PORT": ("node", "tcp_port", int),

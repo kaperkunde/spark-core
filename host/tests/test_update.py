@@ -121,7 +121,7 @@ def fake_ble(monkeypatch):
     dev = FakeDevice(spark=True)
     found = []
 
-    async def find_bootloader(address, timeout):
+    async def find_bootloader(address, timeout, adapter=""):
         found.append(address)
         if dev.mode != "ota":
             raise update.dfu.DfuError("no DFU bootloader advertising")
