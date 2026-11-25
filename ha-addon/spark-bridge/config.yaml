@@ -1,0 +1,29 @@
+name: SpArk Room Bridge
+version: "0.1.0"
+slug: spark_bridge
+description: Bridges a SpArkNode MeshCore room server (Bluetooth) to Discord
+arch:
+  - aarch64
+  - amd64
+startup: application
+boot: auto
+init: false
+# BlueZ is reached over the host's system D-Bus.
+host_dbus: true
+# Only if a container cannot use the Bluetooth socket without it (untested): privileged: [NET_ADMIN]
+map:
+  - type: data
+options:
+  node_name: SparkNode
+  ble_adapter: ""
+  ble_address: ""
+  discord_token: ""
+  guild_ids: ""
+  log_level: INFO
+schema:
+  node_name: str
+  ble_adapter: str?
+  ble_address: str?
+  discord_token: password
+  guild_ids: str?
+  log_level: list(DEBUG|INFO|WARNING|ERROR)

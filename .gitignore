@@ -27,3 +27,5 @@ platformio.local.ini
 /.spark-tools/
 /backups/
 /spark-bridge.lock
+
+ha-addon/spark-bridge/host/
