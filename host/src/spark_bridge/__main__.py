@@ -18,7 +18,8 @@ def build_parser() -> argparse.ArgumentParser:
         prog="spark-bridge",
         description="SpArk Room Bridge: connect a SpArkNode (MeshCore room server with HostLink) to Discord. "
                     "Settings and DISCORD_TOKEN come from the repository's .env (see .env.example). "
-                    "'spark-bridge update <zip>' updates the node over Bluetooth, 'spark-bridge scan' lists advertising nodes and bootloaders (see --help there).")
+                    "'spark-bridge update <zip>' updates the node over Bluetooth, 'spark-bridge scan' lists advertising nodes and bootloaders, 'spark-bridge kids-firmware' and "
+                    "'spark-bridge kids-update' handle Bluetooth updates of SpArkKids units (see --help there).")
     ap.add_argument("--env", "-e", default=None,
                     help="path to the .env file (default: $SPARK_ENV_FILE, ./.env, or the repository's .env)")
     ap.add_argument("--config", "-c", default=None, help="legacy: a config.toml instead of .env")
@@ -84,6 +85,12 @@ async def run(cfg, use_discord: bool) -> int:
     tasks = [asyncio.create_task(node.run(), name="node")]
     if observer:
         tasks.append(asyncio.create_task(observer.run(), name="observer"))
+    kids = None
+    if cfg.kids.enabled and cfg.node.transport == "ble":
+        from .kidsota import KidsOtaService, default_fw_dir
+        fw_dir = cfg.kids.firmware_dir or default_fw_dir(cfg.db_path)
+        kids = KidsOtaService(fw_dir, adapter=cfg.node.ble_adapter, scan_minutes=cfg.kids.scan_minutes, node=node)
+        tasks.append(asyncio.create_task(kids.run(), name="kids-ota"))
     if client:
         client.bridge = bridge
         tasks.append(asyncio.create_task(client.start(cfg.discord_token), name="discord"))
@@ -103,6 +110,8 @@ async def run(cfg, use_discord: bool) -> int:
     waiter = asyncio.create_task(stop.wait())
     done, _ = await asyncio.wait([waiter, *tasks], return_when=asyncio.FIRST_COMPLETED)
     node.stop()
+    if kids:
+        kids.stop()
     if observer:
         observer.stop()   # publishes "offline" on connected brokers
         obs_task = next(t for t in tasks if t.get_name() == "observer")
@@ -130,6 +139,12 @@ def main(argv: list[str] | None = None) -> int:
     if argv[:1] == ["update"]:
         from .update import main as update_main
         return update_main(argv[1:])
+    if argv[:1] == ["kids-update"]:
+        from .kidsota import update_main
+        return update_main(argv[1:])
+    if argv[:1] == ["kids-firmware"]:
+        from .kidsota import firmware_main
+        return firmware_main(argv[1:])
     if argv[:1] == ["scan"]:
         from .update import scan_main
         return scan_main(argv[1:])

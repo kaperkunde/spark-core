@@ -90,12 +90,22 @@ class HealthConfig:
 
 
 @dataclass
+class KidsConfig:
+    # Bluetooth updates for SpArkKids units (kidsota.py). Only active once a bundle is installed
+    # (spark-bridge kids-firmware install); BRIDGE_KIDS_OTA=0 turns it off entirely.
+    enabled: bool = True
+    firmware_dir: str = ""        # default: kids-firmware/ next to the database
+    scan_minutes: float = 5.0
+
+
+@dataclass
 class Config:
     node: NodeConfig = field(default_factory=NodeConfig)
     discord: DiscordConfig = field(default_factory=DiscordConfig)
     limits: LimitsConfig = field(default_factory=LimitsConfig)
     health: HealthConfig = field(default_factory=HealthConfig)
     observer: ObserverConfig = field(default_factory=ObserverConfig)
+    kids: KidsConfig = field(default_factory=KidsConfig)
     observer_password: str = ""   # value of the variable named by observer.password_env
     db_path: str = "spark-bridge.db"
     allow_dangerous_cli: bool = False
@@ -135,7 +145,7 @@ def _fill(obj, data: dict, section: str) -> None:
 
 def parse(data: dict, config_dir: Path = Path(".")) -> Config:
     cfg = Config(config_dir=config_dir)
-    known = {"node", "discord", "limits", "health", "state", "observer", "allow_dangerous_cli"}
+    known = {"node", "discord", "limits", "health", "state", "observer", "kids", "allow_dangerous_cli"}
     for key in data:
         if key not in known:
             raise ConfigError(f"unknown section or key: {key}")
@@ -148,6 +158,9 @@ def parse(data: dict, config_dir: Path = Path(".")) -> Config:
             h[k] = _hhmm(h[k], f"[health] {k}")
     _fill(cfg.health, h, "health")
     _fill(cfg.observer, data.get("observer", {}), "observer")
+    _fill(cfg.kids, data.get("kids", {}), "kids")
+    if cfg.kids.scan_minutes < 1:
+        raise ConfigError("[kids] scan_minutes must be at least 1")
     if isinstance(cfg.observer.brokers, str):
         cfg.observer.brokers = _list(cfg.observer.brokers)
     if cfg.observer.enabled:
@@ -243,6 +256,9 @@ ENV_KEYS: dict[str, tuple[str, str, object]] = {
     "BRIDGE_HEALTH_REPORT": ("health", "report", str),
     "BRIDGE_HEALTH_SAMPLE_MINUTES": ("health", "sample_minutes", int),
     "BRIDGE_DB_PATH": ("state", "db_path", str),
+    "BRIDGE_KIDS_OTA": ("kids", "enabled", _bool),
+    "BRIDGE_KIDS_FIRMWARE_DIR": ("kids", "firmware_dir", str),
+    "BRIDGE_KIDS_SCAN_MINUTES": ("kids", "scan_minutes", float),
     "BRIDGE_ALLOW_DANGEROUS_CLI": ("", "allow_dangerous_cli", _bool),
     # MQTT observer (see observer.py and host/README.md)
     "BRIDGE_OBSERVER": ("observer", "enabled", _bool),
