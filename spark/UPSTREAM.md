@@ -17,14 +17,17 @@ updates (`dfu`, `spark-bridge update`); the node also reports a build id (`get b
 SpArkNode1.2 and SpArkBridge1.2 add the HostLink sender name (Discord aliases on Public), the
 confirmation for Discord -> Public send, and the repeater's region/loop checks in the room
 server's relay. SpArkNode1.3 and SpArkBridge1.3 add the MQTT observer (raw RX feed, node-signed
-tokens), channel routes with hops/SNR footers, and send logging. Git tags use the version names.
+tokens), channel routes with hops/SNR footers, and send logging. SpArkBridge1.4 and SpArkKids1.1
+add Bluetooth updates of the kids' T-Decks through the bridge (signed bundles). SpArkKids also has
+a numeric version code (`KIDS_FW_CODE`, major * 100 + minor: SpArkKids1.1 = 101) next to the label;
+it must increase with every release, as the T-Deck only accepts a higher code. Git tags use the version names.
 Tags made before the SpArk spelling keep the old casing (`SparkNode1`, `SparkBridge1`,
 `SparkKids1`, `SparkNode1.1`, `SparkBridge1.1`, `SparkNode1.2`, `SparkBridge1.2`); from 1.3 on
 tags use the new one (`SpArkNode1.3`, `SpArkBridge1.3`). Hosts read both spellings of the
 version label, case-insensitively. `FIRMWARE_VERSION` is limited to 20 bytes
 (`v1.18.0-SpArkNode1.3` is exactly 20): a bug-fix release keeps that label and sets
 `-D SPARK_RELEASE_PATCH=<n>` (see HOSTLINK.md, "Version labels"). Version strings live in `variants/spark_p1/platformio.ini`
-(`FIRMWARE_VERSION`), `variants/spark_tdeck/platformio.ini` (`KIDS_FW_VERSION`) and
+(`FIRMWARE_VERSION`), `variants/spark_tdeck/platformio.ini` (`KIDS_FW_VERSION`, `KIDS_FW_CODE`) and
 `host/pyproject.toml` + `host/src/spark_bridge/__init__.py`.
 
 ## Hooks in upstream files (all inside `#ifdef`)

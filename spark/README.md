@@ -8,8 +8,8 @@ It turns one solar roof node into a hub for your household and your neighbourhoo
 | Part | Version | What it is |
 |---|---|---|
 | **SpArkNode** | SpArkNode1.3 (`v1.18.0-SpArkNode1.3`) | Firmware for a SenseCAP Solar Node P1 on your roof: a MeshCore **room** with store-and-forward for your own people, and a **relay** that strengthens the local mesh. |
-| **SpArk Room Bridge** | SpArkBridge1.3 (`spark-bridge 1.3`) | A small Python service on a Raspberry Pi or computer near the node. It links the node to **Discord**, one-way or two-way, with MeshCore Public and with the SpArkNode room, and can make the node an **MQTT observer** for MC-Radar / Let's Mesh. |
-| **SpArkKids** | SpArkKids1 | Firmware for a **LilyGO T-Deck Plus**: a simple touch messenger with location sharing for kids, or anyone who doesn't like fancy tech. A "dumb phone" without a service plan. |
+| **SpArk Room Bridge** | SpArkBridge1.4 (`spark-bridge 1.4`) | A small Python service on a Raspberry Pi or computer near the node. It links the node to **Discord**, one-way or two-way, with MeshCore Public and with the SpArkNode room, can make the node an **MQTT observer** for MC-Radar / Let's Mesh, and offers firmware updates to SpArkKids units in Bluetooth range. |
+| **SpArkKids** | SpArkKids1.1 (version code 101) | Firmware for a **LilyGO T-Deck Plus**: a simple touch messenger with location sharing for kids, or anyone who doesn't like fancy tech. A "dumb phone" without a service plan. |
 
 ```
  T-Deck Plus (SpArkKids) ─┐
@@ -290,10 +290,49 @@ something simple: big touch targets, no menus to get lost in, no phone plan.
 **First use.** The device asks "What is your name?", logs in to the room with the room password,
 adverts its name and appears in the room's member directory. Parent settings: People > gear >
 Parent settings, with `KIDS_PARENT_PIN`. There you can change the name, room password, room key,
-PIN, volume, location sharing, trackball, touch calibration and the Public channel.
+PIN, volume, location sharing, trackball, touch calibration, the Public channel and Bluetooth updates.
+The settings list scrolls: swipe it, or move the trackball down (the focused row stays on screen).
+Rows near the end: **Public channel** (tap to toggle on/off), **BT updates**, **Lock settings**.
+
+**Bluetooth updates from your bridge (SpArkKids1.1+).** LoRa is too slow for firmware, so the
+bridge carries it over Bluetooth when a T-Deck is in range:
+
+1. Build the signed bundle and install it on the bridge host:
+   ```sh
+   pio run -e SparkKids_TDeckPlus -t kids_ota       # .pio/build/SparkKids_TDeckPlus/kids-ota.zip
+   host/.venv/bin/spark-bridge kids-firmware install .pio/build/SparkKids_TDeckPlus/kids-ota.zip
+   ```
+2. The running bridge scans every 5 minutes (`BRIDGE_KIDS_SCAN_MINUTES`) while its node link is
+   up. A T-Deck of your family with a lower version code that is not snoozed gets an offer.
+   `spark-bridge kids-update --once` does one round by hand (it never touches the node link).
+   A scan takes 20 s: macOS scans slowly while it also holds the node link.
+3. The T-Deck lights up and asks **Update available (SpArkKids1.1 -> SpArkKids1.2)**:
+   **Install** or **Later** (the focus starts on Later; back = Later). Later hides offers for
+   12 hours, also across restarts; the bridge sees that and does not reconnect meanwhile.
+4. Install shows a progress bar for about a minute. The T-Deck checks the image's SHA-256 and
+   signature, switches to the other app slot and restarts. Messages, people and settings stay.
+   If the new firmware does not run for 20 s (crash, power cut), the bootloader goes back to the
+   previous one by itself.
+
+Rules on the T-Deck: an update needs at least 3700 mV battery (about 40 %) or USB power, the
+version code must be higher than the installed one, and the image must be signed with
+`KIDS_OTA_SIGNING_KEY` (only its public half is in the firmware). "Paired bridge" means: same
+family tag (a hash of `KIDS_ROOM_KEY` and that public key, in the advert) and a valid signature,
+so a bridge only carries what your build machine signed; it cannot make or alter an update.
+Parent settings > **BT updates** turns the radio part off (and on again, clearing a Later).
+The first install of SpArkKids1.1 over SpArkKids1 or older is a USB flash, as before.
+
+How it works: the T-Deck advertises about once a second with a NimBLE GATT service (manufacturer data:
+family tag, version code, snoozed/low battery/busy flags; no names). The bridge writes an offer
+(code, size, SHA-256, signature, label); after Install it streams the image with write without
+response in 4 KB-acknowledged blocks (16 KB window), the T-Deck writes it into the inactive OTA
+slot (`app0`/`app1`, 6.25 MB each in the stock 16 MB partition table; SPIFFS with the kids' data
+is not touched). Constants: `examples/spark_kids/KidsLogic.h` and `host/src/spark_bridge/kidsfw.py`.
 
 **USB console** (115200 baud): `info`, then `unlock <pin>` for `name`, `pw`, `key <64 hex>`, `pin`,
-`share on|off`, `public [on|off]`, `relogin`, `advert`, `members`, `touchcal`, `time <epoch>`, `reboot`.
+`share on|off`, `public [on|off]`, `relogin`, `advert`, `members`, `touchcal`, `time <epoch>`,
+`ota` (Bluetooth update status, heap), `ota on|off`, `ota unsnooze`, `ota tap install|later`
+(presses the prompt's buttons; for tests without a finger on the screen), `reboot`.
 
 **Back up first, never erase.** A T-Deck may come with other firmware (and a licence tied to it).
 `setup.sh` backs up the full 16 MB flash before the first flash. Restore it bit for bit with:
@@ -309,6 +348,7 @@ cp .env.example .env                                   # and fill it in, or run 
 pio run -e SparkNode_P1 -t create_uf2 -t dfu_zip      # .pio/build/SparkNode_P1/firmware.uf2 and firmware-dfu.zip
 spark/bootloader/build.sh                              # OTA-safe bootloader update UF2 (see above)
 pio run -e SparkKids_TDeckPlus -t mergebin             # firmware-merged.bin (0x0) and firmware.bin (0x10000)
+pio run -e SparkKids_TDeckPlus -t kids_ota             # kids-ota.zip: signed bundle for Bluetooth updates
 pio test -e native_spark                               # SpArk unit tests
 pio test -e native                                     # upstream unit tests
 cd host && python3 -m venv .venv && .venv/bin/pip install -e '.[test]' && .venv/bin/pytest
@@ -318,8 +358,14 @@ cd host && python3 -m venv .venv && .venv/bin/pip install -e '.[test]' && .venv/
 
 Flashing by hand: SpArkNode: double-press reset, copy `firmware.uf2` to the UF2 drive. SpArkKids
 (download mode): `esptool --chip esp32s3 -p <port> -b 921600 --after watchdog-reset write-flash 0x0 firmware-merged.bin`
-the first time, `write-flash 0x10000 firmware.bin` for updates. `--after watchdog-reset` matters:
-with the default reset the ESP32-S3 stays in its ROM bootloader.
+the first time, `write-flash 0xe000 boot_app0.bin 0x10000 firmware.bin` for updates (`boot_app0.bin`
+is in the PlatformIO Arduino-ESP32 package, `tools/partitions/`; it makes the T-Deck boot `app0`
+even if a Bluetooth update left it on `app1`; `pio run -t upload` writes it too).
+`--after watchdog-reset` matters: with the default reset the ESP32-S3 stays in its ROM bootloader.
+
+OTA tests: `SPARK_KIDS_TEST_CODE=<n> pio run -e SparkKids_TDeckPlus -t kids_ota` builds the same
+firmware with version code n and the label `SpArkKids-test<n>`, so an update can be tried without
+a real version bump. Never ship such a bundle: rebuild without the variable afterwards.
 
 ## For developers
 

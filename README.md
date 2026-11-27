@@ -9,11 +9,11 @@ one solar roof node into a hub for your own people and devices, and a relay that
   on your roof. It is a MeshCore **room** with store-and-forward, so your tribe can talk even when
   they are not online at the same time, and a **relay** that strengthens the mesh. Other
   MeshCore-capable boards can work too.
-- **SpArk Room Bridge** (SpArkBridge1.3): a service on a Raspberry Pi or computer near the roof node.
+- **SpArk Room Bridge** (SpArkBridge1.4): a service on a Raspberry Pi or computer near the roof node.
   Your SpArkNode room is a private room on the mesh; the bridge lets you read and answer it from
   **Discord** when you don't have your radio on you, plus a read-only mirror of MeshCore Public
   (more platforms later). It can also make the node an MQTT observer for MC-Radar.
-- **SpArkKids** (SpArkKids1): firmware for the **LilyGO T-Deck Plus**: a simple touch messenger
+- **SpArkKids** (SpArkKids1.1): firmware for the **LilyGO T-Deck Plus**: a simple touch messenger
   with location sharing for kids, or anyone in the household who doesn't like fancy tech. A
   "dumb phone" without a service plan. Talks only to your SpArkNode (and, if a parent allows it,
   to MeshCore Public).

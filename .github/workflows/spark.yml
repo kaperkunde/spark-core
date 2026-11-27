@@ -66,10 +66,15 @@ jobs:
               -e 's/^SPARK_ROOM_PASSWORD=$/SPARK_ROOM_PASSWORD=ci-room/' \
               -e 's/^KIDS_ROOM_KEY=$/KIDS_ROOM_KEY=0000000000000000000000000000000000000000000000000000000000000001/' \
               -e 's/^KIDS_PARENT_PIN=$/KIDS_PARENT_PIN=0000/' \
+              -e 's/^KIDS_OTA_SIGNING_KEY=$/KIDS_OTA_SIGNING_KEY=000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f/' \
               .env.example > .env
 
       - name: Build ${{ matrix.environment }}
         run: pio run -e ${{ matrix.environment }}
+
+      - name: SpArkKids signed Bluetooth update bundle
+        if: matrix.environment == 'SparkKids_TDeckPlus'
+        run: pio run -e SparkKids_TDeckPlus -t kids_ota
 
       - name: SpArkNode DFU package and OTA-safe bootloader
         if: matrix.environment == 'SparkNode_P1'

@@ -1,4 +1,4 @@
-# SpArk Room Bridge (SpArkBridge1.3)
+# SpArk Room Bridge (SpArkBridge1.4)
 
 The Discord service of [SpArk](../spark/README.md). Your SpArkNode room is a private room on the
 mesh; the bridge lets you read and answer it from Discord when you don't have your radio on you,
@@ -232,6 +232,37 @@ installed) when the updated app cannot be reached. Exit codes: 0 done and verifi
 with the old app intact, 2 bad config or package, 4 the node has no app and waits in its
 bootloader: then `spark-bridge update --in-bootloader <zip>` retries (SpArk bootloader), or see
 "Recovery" in [spark/README.md](../spark/README.md#update-over-bluetooth).
+
+## Bluetooth updates for SpArkKids (`spark-bridge kids-firmware`, `kids-update`)
+
+The bridge keeps one signed SpArkKids bundle and offers it to T-Decks of its family that come
+into Bluetooth range with an older version (spark/README.md, "SpArkKids", has the whole story):
+
+```sh
+pio run -e SparkKids_TDeckPlus -t kids_ota      # at the repository root -> kids-ota.zip
+host/.venv/bin/spark-bridge kids-firmware install .pio/build/SparkKids_TDeckPlus/kids-ota.zip
+host/.venv/bin/spark-bridge kids-firmware show
+host/.venv/bin/spark-bridge kids-update --list  # kids units in range: code, family, flags, RSSI
+host/.venv/bin/spark-bridge kids-update --once  # one scan + offer round, then exit
+```
+
+`install` checks the bundle (zip with manifest.json + firmware.bin: SHA-256, ESP32 image,
+Ed25519 signature against the public key in the manifest) and copies it to
+`BRIDGE_KIDS_FIRMWARE_DIR` (default `kids-firmware/current.zip` next to the database); it
+refuses a lower code than the installed one without `--force`. The running bridge picks a new
+bundle up by itself. Every `BRIDGE_KIDS_SCAN_MINUTES` (5) it scans for 20 s while the node link
+is up, and connects only to units that advertise the bundle's family tag, a lower code and no
+snoozed/low-battery/busy flag. If the node's key is known, the bundle's family tag must match
+it too (a bundle built for another room is never offered).
+
+Back-off per unit, so a T-Deck is not bothered: Later (snoozed) = what the unit reports, at most
+12 h; no tap within 2.5 minutes = 1 h (the bridge closes the prompt); low battery = 30 min; refused (not newer, bad signature,
+too big) = 24 h or a new bundle; connection or transfer errors = 1, 2, 4 ... 30 min.
+
+The kids link is a separate Bluetooth connection: it never uses the node link or its lock, so it
+runs next to a live bridge. `kids-ota.lock` in the firmware directory keeps two processes (the
+daemon and a manual `kids-update`) from updating at the same time. `BRIDGE_KIDS_OTA=0` turns the
+daemon's part off. On Linux the scan uses `BRIDGE_BLE_ADAPTER` like the node link.
 
 ## Testing without hardware
 

@@ -365,6 +365,12 @@ if [ "$DO_KIDS" = 1 ]; then
     printf '%s\n' "$KIDS_PARENT_PIN" | grep -Eq '^[0-9]{4,8}$' && break
     warn "4 to 8 digits."; KIDS_PARENT_PIN=""
   done
+  if [ -z "$KIDS_OTA_SIGNING_KEY" ]; then
+    # Signs SpArkKids bundles for Bluetooth updates through the bridge (public half goes into the
+    # firmware). Generated once and never shown; a new key needs one USB flash per T-Deck.
+    KIDS_OTA_SIGNING_KEY="$(od -An -N32 -tx1 /dev/urandom | tr -d ' \n')"
+    info "Generated KIDS_OTA_SIGNING_KEY (signs Bluetooth updates for the T-Decks; keep $ENV_FILE safe)."
+  fi
   info "Public channel: MeshCore Public, readable by everyone nearby. Off by default; parents can"
   info "switch it on or off later on the device (Parent settings > Public channel)."
   if yesno "Public channel on by default?" "$( [ "${KIDS_PUBLIC_ENABLED:-0}" = 1 ] && echo y || echo n )"; then KIDS_PUBLIC_ENABLED=1; else KIDS_PUBLIC_ENABLED=0; fi
@@ -423,7 +429,7 @@ fi
 # write .env ----------------------------------------------------------------------------------
 for k in SPARK_RADIO_PRESET SPARK_LORA_FREQ SPARK_LORA_BW SPARK_LORA_SF SPARK_LORA_CR SPARK_LORA_TX_POWER SPARK_SCOPE \
          SPARK_PATH_HASH_SIZE SPARK_NODE_NAME SPARK_NODE_LAT SPARK_NODE_LON SPARK_ADMIN_PASSWORD SPARK_ROOM_PASSWORD \
-         SPARK_BLE_PIN KIDS_ROOM_KEY KIDS_ROOM_NAME KIDS_ROOM_PASSWORD KIDS_PARENT_PIN KIDS_PUBLIC_ENABLED \
+         SPARK_BLE_PIN KIDS_ROOM_KEY KIDS_ROOM_NAME KIDS_ROOM_PASSWORD KIDS_PARENT_PIN KIDS_OTA_SIGNING_KEY KIDS_PUBLIC_ENABLED \
          KIDS_PUBLIC_PER_HOUR DISCORD_TOKEN BRIDGE_GUILD_IDS BRIDGE_TRANSPORT BRIDGE_BLE_NAME BRIDGE_BLE_ADDRESS \
          BRIDGE_SERIAL_PORT BRIDGE_DEFAULT_PER_MINUTE BRIDGE_TZ SPARK_TZ BRIDGE_OBSERVER BRIDGE_OBSERVER_BROKERS \
          BRIDGE_OBSERVER_IATA BRIDGE_OBSERVER_NAME BRIDGE_OBSERVER_OWNER BRIDGE_OBSERVER_USERNAME \
@@ -437,6 +443,10 @@ ok "Wrote $ENV_FILE (mode 600, gitignored)."
 NODE_UF2="$ROOT/.pio/build/$NODE_ENV/firmware.uf2"
 KIDS_FACTORY="$ROOT/.pio/build/$KIDS_ENV/firmware-merged.bin"
 KIDS_APP="$ROOT/.pio/build/$KIDS_ENV/firmware.bin"
+KIDS_OTA="$ROOT/.pio/build/$KIDS_ENV/kids-ota.zip"
+# otadata that boots app0: written with an app-only flash, so a T-Deck that last took a Bluetooth
+# update (running from app1) starts the newly flashed image
+KIDS_BOOT_APP0="$HOME/.platformio/packages/framework-arduinoespressif32/tools/partitions/boot_app0.bin"
 NODE_ZIP="$ROOT/.pio/build/$NODE_ENV/firmware-dfu.zip"
 
 find_uf2_drive() {
@@ -598,7 +608,7 @@ flash_kids() {
     fi
     run "$ESPTOOL" --chip esp32s3 -p "$port" -b 921600 --after watchdog-reset write-flash 0x0 "$KIDS_FACTORY"
   else
-    run "$ESPTOOL" --chip esp32s3 -p "$port" -b 921600 --after watchdog-reset write-flash 0x10000 "$KIDS_APP"
+    run "$ESPTOOL" --chip esp32s3 -p "$port" -b 921600 --after watchdog-reset write-flash 0xe000 "$KIDS_BOOT_APP0" 0x10000 "$KIDS_APP"
   fi
   [ "$DRY_RUN" = 1 ] || ok "SpArkKids flashed. The T-Deck restarts and asks for a name."
   info "Parent settings: People > gear > Parent settings, PIN from KIDS_PARENT_PIN."
@@ -612,8 +622,10 @@ if [ "$DO_KIDS" = 1 ]; then
     title "3. Build SpArkKids"
     if [ "$DRY_RUN" = 1 ] && [ -z "$(get KIDS_ROOM_KEY)" ]; then info "(the real run builds once KIDS_ROOM_KEY is known)"; fi
     pio_run run -e "$KIDS_ENV"
-    pio_run run -e "$KIDS_ENV" -t mergebin
-    [ "$DRY_RUN" = 1 ] || ok "Built $KIDS_FACTORY and $KIDS_APP"
+    pio_run run -e "$KIDS_ENV" -t mergebin -t kids_ota
+    [ "$DRY_RUN" = 1 ] || ok "Built $KIDS_FACTORY, $KIDS_APP and $KIDS_OTA"
+    info "Bluetooth updates: the bridge offers $KIDS_OTA to T-Decks near it once installed there:"
+    info "  host/.venv/bin/spark-bridge kids-firmware install $KIDS_OTA"
     if yesno "Flash a T-Deck Plus now?" y; then flash_kids
     else info "Later: ./setup.sh again, or esptool write-flash 0x0 $KIDS_FACTORY (first time) / 0x10000 $KIDS_APP."; fi
   fi
