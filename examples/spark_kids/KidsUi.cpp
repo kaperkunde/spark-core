@@ -138,6 +138,10 @@ void KidsMesh::goBack() {
     case SCR_RENAME: _compose[0] = 0; go(SCR_MENU); break;
     case SCR_CONFIRM: go(SCR_RENAME); break;
     case SCR_TOUCHCAL: go(SCR_SETTINGS); break;
+    case SCR_UPDATE:          // back on the prompt = Later; nothing else interrupts an update
+      if (_ota.phase() == KidsOta::PROMPT) _ota.later();
+      else { hw.beepBump(); _back_hint = 0; _dirty = true; return; }
+      break;
   }
   hw.beepBack();
 }
@@ -359,6 +363,8 @@ void KidsMesh::onTap(const Hit& h) {
     case H_MENU_PARENT: openPin(SCR_PEOPLE); break;
     case H_DIGIT: pinKey('0' + h.arg); break;
     case H_DEL: pinKey(KEY_BACKSPACE); return;
+    case H_INSTALL: _ota.install(); break;
+    case H_LATER: _ota.later(); break;
     case H_VOL_DOWN: case H_VOL_UP:
       if (h.id == H_VOL_DOWN && _prefs.volume > 0) _prefs.volume--;
       if (h.id == H_VOL_UP && _prefs.volume < 3) _prefs.volume++;
@@ -392,6 +398,7 @@ void KidsMesh::uiLoop() {
   }
   touchLoop();
 
+  if (_screen == SCR_UPDATE) _last_input = millis();   // stays lit while an update is offered or runs
   if (hw.isBacklightOn() && (long)(millis() - _last_input) > (long)SCREEN_IDLE_MS &&
       (_wake_until == 0 || (long)(millis() - _wake_until) >= 0) && !_gest.down()) {
     hw.backlight(false);
@@ -420,6 +427,13 @@ void KidsMesh::onKey(int c) {
     return;
   }
   if (_screen == SCR_PIN) { pinKey((char)c); return; }
+  if (_screen == SCR_UPDATE) {
+    if (_ota.phase() != KidsOta::PROMPT) return;
+    if (c == 'i' || c == 'I' || (c == KEY_ENTER && _sel == 0)) _ota.install();
+    else if (c == 'l' || c == 'L' || (c == KEY_ENTER && _sel == 1)) _ota.later();
+    else if (c == KEY_BACKSPACE || c == 0x7F) goBack();
+    return;
+  }
   bool composing = chatScreen() || _screen == SCR_NAME ||
                    _screen == SCR_RENAME || (_screen == SCR_SETTINGS && _edit >= 0);
   if (!composing) {
@@ -495,6 +509,13 @@ void KidsMesh::onTrack(int ev) {
       if (top + rh > _list_px + view) _list_px = top + rh - view;
       break;
     }
+    case SCR_UPDATE:
+      if (_ota.phase() != KidsOta::PROMPT) break;
+      _sel_visible = true;
+      if (ev == TB_UP || ev == TB_LEFT) _sel = 0;
+      else if (ev == TB_DOWN || ev == TB_RIGHT) _sel = 1;
+      else if (ev == TB_CLICK) { if (_sel == 0) _ota.install(); else _ota.later(); }
+      break;
     case SCR_MENU:
       _sel_visible = true;
       if (ev == TB_UP) _sel = 0;
@@ -608,6 +629,15 @@ void KidsMesh::settingsRow(int i, char* label, char* value) {
       sprintf(value, "%s%s", publicOn() ? "on" : "off",
               _prefs.public_mode == kids::PUBLIC_DEFAULT ? " (build default)" : "");
       break;
+    case 13: {
+      strcpy(label, "BT updates");
+      uint32_t left = _ota.snoozeLeft(getRTCClock()->getCurrentTime());
+      if (!_ota.keyPresent()) strcpy(value, "not in this build");
+      else if (!_ota.enabled()) strcpy(value, "off");
+      else if (left) sprintf(value, "on, later: %luh%02lu", (unsigned long)(left / 3600), (unsigned long)(left / 60 % 60));
+      else sprintf(value, "on (code %lu)", (unsigned long)KIDS_FW_CODE);
+      break;
+    }
     default: strcpy(label, "Lock settings"); strcpy(value, KIDS_FW_VERSION); break;
   }
 }
@@ -634,6 +664,10 @@ void KidsMesh::settingsClick(int i) {
     case 9: _members_next = 0; _members_tag = 0; _next_members = millis(); break;
     case 10: break;
     case 12: _prefs.public_mode = kids::publicToggled(_prefs.public_mode, KIDS_PUBLIC_ENABLED); savePrefs(); break;
+    case 13:   // on -> off; a pending "Later" is cleared when turning on
+      if (_ota.enabled()) _ota.setEnabled(false);
+      else { _ota.clearSnooze(); _ota.setEnabled(true); }
+      break;
     default: _admin = false; go(SCR_ROOM); return;
   }
   _dirty = true;
@@ -1237,6 +1271,70 @@ void KidsMesh::drawPinPad() {
   }
 }
 
+void KidsMesh::drawUpdate() {
+  FrameBuffer& fb = hw.fb;
+  const kids::ota::Offer& o = _ota.offer();
+  char line[64];
+  fb.setFont(&FreeSans12pt7b);
+  fb.setTextColor(C_WHITE);
+  switch (_ota.phase()) {
+    case KidsOta::PROMPT: {
+      fb.setCursor(20, 78);
+      fb.print("Update available");
+      snprintf(line, sizeof(line), "%s -> %s", _ota.myLabel(), o.label);
+      fitText(line, &FreeSans9pt7b, SCREEN_W - 40);
+      fb.setFont(&FreeSans9pt7b);
+      fb.setTextColor(C_YELLOW);
+      fb.setCursor(20, 106);
+      fb.print(line);
+      fb.setTextColor(C_GREY);
+      fb.setCursor(20, 130);
+      fb.print("From your bridge, about 1 minute");
+      bool f0 = _sel_visible && _sel == 0, f1 = _sel_visible && _sel == 1;
+      drawButton(20, 150, 130, 56, "Install", H_INSTALL, true, 0x0400);
+      if (f0) fb.drawRoundRect(17, 147, 136, 62, 10, C_WHITE);
+      addHit(12, 142, 146, 72, H_INSTALL);
+      drawButton(170, 150, 130, 56, "Later", H_LATER, true, C_DGREY);
+      if (f1) fb.drawRoundRect(167, 147, 136, 62, 10, C_WHITE);
+      addHit(162, 142, 146, 72, H_LATER);
+      break;
+    }
+    case KidsOta::RECEIVING:
+    case KidsOta::FINISHING:
+    case KidsOta::DONE: {
+      bool done = _ota.phase() != KidsOta::RECEIVING;
+      fb.setCursor(20, 85);
+      fb.print(done ? (_ota.phase() == KidsOta::DONE ? "Restarting..." : "Checking...") : "Updating...");
+      int pct = _ota.progressPct();
+      fb.drawRoundRect(20, 110, SCREEN_W - 40, 26, 6, C_LGREY);
+      fb.fillRoundRect(23, 113, (SCREEN_W - 46) * pct / 100, 20, 4, C_GREEN);
+      fb.setFont(&FreeSans9pt7b);
+      fb.setTextColor(C_WHITE);
+      snprintf(line, sizeof(line), "%d %%   %s", pct, o.label);
+      fb.setCursor(20, 160);
+      fb.print(line);
+      fb.setTextColor(C_GREY);
+      fb.setCursor(20, 190);
+      fb.print("Keep it on and near the bridge");
+      break;
+    }
+    case KidsOta::FAILED:
+      fb.setCursor(20, 90);
+      fb.print("Update stopped");
+      fb.setFont(&FreeSans9pt7b);
+      fb.setTextColor(C_ORANGE);
+      fb.setCursor(20, 120);
+      fb.print(kids::ota::reasonText(_ota.failReason()));
+      fb.setTextColor(C_GREY);
+      fb.setCursor(20, 150);
+      fb.print(_ota.failReason() == kids::ota::R_LOW_BATTERY ? "Plug in USB, the bridge asks again" :
+               "Nothing changed. The bridge tries again");
+      break;
+    default:
+      break;
+  }
+}
+
 void KidsMesh::drawTouchCal() {
   FrameBuffer& fb = hw.fb;
   if (_cal_step < 2) {
@@ -1339,6 +1437,10 @@ void KidsMesh::draw() {
       drawTopBar("Change name", true, false);
       drawBackHint();
       break;
+    case SCR_UPDATE:
+      drawUpdate();
+      drawTopBar("Update", false, false);
+      break;
     case SCR_TOUCHCAL:
       drawTouchCal();
       if (_cal_step >= 2) { drawTopBar("Touch test", true, false); drawBackHint(); }
@@ -1376,6 +1478,7 @@ void KidsMesh::handleSerialCommand(char* cmd) {
     Serial.printf("gps baud %d %s\n", _gps_baud, diag);
     Serial.printf("touch %s 0x%02X cal x %d..%d y %d..%d (%s)\n", hw.touchOk() ? "ok" : "none", hw.touchAddr(),
                   _cal.x0, _cal.x1, _cal.y0, _cal.y1, _prefs.cal_ok ? "saved" : "default");
+    _ota.printStatus(Serial, getRTCClock()->getCurrentTime());
     return;
   }
   if (strcmp(cmd, "touchraw on") == 0 || strcmp(cmd, "touchraw off") == 0) {
@@ -1402,6 +1505,17 @@ void KidsMesh::handleSerialCommand(char* cmd) {
   } else if (strcmp(cmd, "public") == 0) {
     Serial.printf("public %s (%s)\n", publicOn() ? "on" : "off", _prefs.public_mode == kids::PUBLIC_DEFAULT ? "build default" : "set by parent");
   }
+  // Bluetooth update. "ota tap install|later" presses the prompt's buttons (for tests without a
+  // finger on the screen); like every command here it needs the parent PIN (unlock <pin>).
+  else if (strcmp(cmd, "ota") == 0) { _ota.printStatus(Serial, getRTCClock()->getCurrentTime()); }
+  else if (strcmp(cmd, "ota on") == 0) { _ota.clearSnooze(); _ota.setEnabled(true); Serial.println("OK"); }
+  else if (strcmp(cmd, "ota off") == 0) { _ota.setEnabled(false); Serial.println("OK"); }
+  else if (strcmp(cmd, "ota unsnooze") == 0) { _ota.clearSnooze(); Serial.println("OK"); }
+  else if (strcmp(cmd, "ota tap install") == 0 || strcmp(cmd, "ota tap later") == 0) {
+    if (_ota.phase() != KidsOta::PROMPT) { Serial.println("ERR no update prompt"); return; }
+    if (cmd[8] == 'i') _ota.install(); else _ota.later();
+    Serial.println("OK");
+  }
   else if (strcmp(cmd, "relogin") == 0) { settingsClick(8); Serial.println("OK"); }
   else if (strcmp(cmd, "advert") == 0) { sendAdvertNow(); Serial.println("OK"); }
   else if (strcmp(cmd, "members") == 0) {
@@ -1421,5 +1535,5 @@ void KidsMesh::handleSerialCommand(char* cmd) {
     if (t > getRTCClock()->getCurrentTime()) getRTCClock()->setCurrentTime(t);
     Serial.println("OK");
   } else if (strcmp(cmd, "reboot") == 0) { ESP.restart(); }
-  else Serial.println("commands: info, name, pw, key, pin, share on|off, public [on|off], relogin, advert, members, touchraw on|off, touchcal, time <epoch>, reboot");
+  else Serial.println("commands: info, name, pw, key, pin, share on|off, public [on|off], relogin, advert, members, touchraw on|off, touchcal, time <epoch>, ota [on|off|unsnooze|tap install|tap later], reboot");
 }

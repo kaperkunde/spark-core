@@ -106,4 +106,59 @@ void toHex(char* out, const uint8_t* in, int n);
 // Parses 64 hex digits into a 32-byte key. Spaces are ignored.
 bool parseKey(const char* hex, uint8_t* key);
 
+
+// --- Bluetooth firmware update (kids OTA) -----------------------------------------------
+// The bridge offers a signed image over a small GATT service; see KidsOta.cpp for the radio
+// side and host/src/spark_bridge/kidsfw.py for the same constants on the bridge.
+
+namespace ota {
+
+static const uint8_t PROTO = 1;
+static const uint32_t SNOOZE_SECS = 12UL * 3600;   // "Later" hides offers this long
+static const uint16_t MIN_BATT_MV = 3700;          // below this an update needs USB power (~40 %)
+static const int LABEL_MAX = 24;                   // short version label in offers ("SpArkKids1.2")
+static const int OFFER_LEN = 1 + 4 + 4 + 32 + 64;  // without the label
+static const int SIGNED_LEN = 16 + 4 + 4 + 32;     // "SPARK-KIDS-OTA-1" + code + size + sha256
+static const int ADVERT_LEN = 12;                  // manufacturer data after the company id
+static const int STATUS_LEN = 12;                  // CTRL read value without the label
+static const uint16_t COMPANY_ID = 0xFFFF;
+
+enum AdvFlag : uint8_t { ADV_SNOOZED = 0x01, ADV_LOW_BATTERY = 0x02, ADV_BUSY = 0x04 };
+enum Cmd : uint8_t { CMD_OFFER = 0x01, CMD_FINISH = 0x02, CMD_ABORT = 0x03, CMD_QUERY = 0x04 };
+enum Ntf : uint8_t { NTF_STATE = 0x81, NTF_ACK = 0x82, NTF_NACK = 0x83 };
+enum State : uint8_t { ST_PROMPT = 1, ST_SNOOZED, ST_REFUSED, ST_READY, ST_DONE, ST_FAILED, ST_NOANSWER, ST_BUSY };
+enum Reason : uint8_t { R_NONE = 0, R_NOT_NEWER, R_BAD_SIGNATURE, R_TOO_BIG, R_LOW_BATTERY, R_BAD_OFFER,
+                        R_HASH_MISMATCH, R_FLASH_ERROR, R_ABORTED, R_DISABLED, R_TIMEOUT };
+
+struct Offer {
+  uint32_t code, size;
+  uint8_t sha[32];
+  uint8_t sig[64];
+  char label[LABEL_MAX + 1];
+};
+
+// CTRL write "offer": [0x01][code u32][size u32][sha256 32][signature 64][label 0..24]
+bool parseOffer(const uint8_t* b, size_t n, Offer& o);
+// The 56 bytes the build signs (Ed25519) for this offer.
+void signedMessage(uint8_t* out, uint32_t code, uint32_t size, const uint8_t* sha);
+// R_NONE if the offer may be shown (signature checked separately), else the refusal reason.
+uint8_t checkOffer(const Offer& o, uint32_t my_code, uint32_t slot_size);
+bool batteryOk(uint16_t mv, bool usb);
+// Seconds of snooze left at `now` (epoch), at most SNOOZE_SECS; 0 = not snoozed.
+uint32_t snoozeLeft(uint32_t until, uint32_t now);
+size_t encodeAdvert(uint8_t* out, const uint8_t* family4, uint32_t code, uint8_t flags);
+size_t encodeState(uint8_t* out, uint8_t state, uint8_t reason, uint32_t value);
+size_t encodeOffset(uint8_t* out, uint8_t op, uint32_t offset);
+size_t encodeStatus(uint8_t* out, size_t cap, uint32_t code, uint8_t flags, uint32_t snooze, uint16_t mv,
+                    const char* label);
+// "SpArkKids1.1 (MeshCore v1.18.0)" -> "SpArkKids1.1"
+void shortLabel(const char* version, char* out, size_t cap);
+const char* reasonText(uint8_t reason);
+
+// Image chunks arrive as [offset u32][bytes], in order. `next` = the next offset expected.
+enum RxResult { RX_OK, RX_DUP, RX_GAP, RX_OVERRUN };
+RxResult rxCheck(uint32_t next, uint32_t size, uint32_t offset, uint32_t len);
+
+}  // namespace ota
+
 }  // namespace kids

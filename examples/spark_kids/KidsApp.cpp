@@ -66,6 +66,8 @@ KidsMesh::KidsMesh(mesh::Radio& radio, StdRNG& rng, mesh::RTCClock& rtc, SimpleM
   _next_batt = _next_floor_save = _msgs_save_at = _people_save_at = 0;
   _serial_len = 0;
   _serial_unlocked = false;
+  _update_back = SCR_ROOM;
+  _ota_valid_done = false;
 }
 
 void KidsMesh::begin(FILESYSTEM& fs) {
@@ -109,6 +111,8 @@ void KidsMesh::begin(FILESYSTEM& fs) {
   if (_prefs.name[0]) _next_advert = millis() + ADVERT_BOOT_DELAY_MS;
   _screen = _prefs.name[0] ? SCR_ROOM : SCR_NAME;
   _last_input = millis();
+
+  _ota.begin(fs, KIDS_FW_CODE, KIDS_FW_VERSION);
 
   // GPS (T-Deck Plus: u-blox at 38400 or L76K at 9600, auto-detected in gpsLoop)
   Serial1.setPins(PIN_GPS_TX, PIN_GPS_RX);
@@ -704,6 +708,40 @@ void KidsMesh::applyName(const char* name) {
 }
 
 // =====================================================================================
+// Bluetooth update (KidsOta does the work; this connects it to the screens)
+
+void KidsMesh::saveAllNow() {
+  savePrefs();
+  if (_msgs_save_at) { _msgs_save_at = 0; saveMsgs(); }
+  if (_people_save_at) { _people_save_at = 0; savePeople(); }
+}
+
+void KidsMesh::otaLoop() {
+  _ota.loop(getRTCClock()->getCurrentTime(), _batt_mv, HWCDC::isPlugged());
+  if (_ota.takePromptEvent()) {
+    if (_screen != SCR_UPDATE) _update_back = _screen == SCR_PIN || _screen == SCR_TOUCHCAL ? SCR_ROOM : _screen;
+    go(SCR_UPDATE);
+    _sel = 1;                 // focus on Later: a stray click does not install
+    _sel_visible = true;
+    wake(30000);
+    hw.beepDM();
+  }
+  if (_screen == SCR_UPDATE) {
+    if (_ota.phase() == KidsOta::IDLE) { go(_update_back); if (_update_back == SCR_ROOM) _scroll_px = 0; }
+    else _dirty = true;       // progress
+  }
+  if (_ota.rebootDue()) {
+    saveAllNow();
+    delay(200);
+    ESP.restart();
+  }
+  if (!_ota_valid_done && millis() > OTA_MARK_VALID_MS) {
+    _ota_valid_done = true;
+    kidsOtaMarkValid();
+  }
+}
+
+// =====================================================================================
 // main loop
 
 void KidsMesh::loop() {
@@ -712,6 +750,7 @@ void KidsMesh::loop() {
   linkLoop();
   checkPending();
   locationLoop();
+  otaLoop();
   uiLoop();
   serialLoop();
 

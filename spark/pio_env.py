@@ -138,6 +138,30 @@ if component == "kids":
         fail("SPARK_TZ must be a POSIX TZ string, e.g. CET-1CEST,M3.5.0,M10.5.0/3 or UTC0")
     strings["KIDS_TZ"] = tz
 
+    # Bluetooth updates: the public half of KIDS_OTA_SIGNING_KEY goes into the firmware (the
+    # secret seed never leaves this script); without a key the firmware keeps Bluetooth off.
+    sys.path.insert(0, os.path.join(ROOT, "host", "src"))
+    from spark_bridge import ed25519 as _ed, kidsfw as _kfw  # noqa: E402
+
+    ota_seed = get("KIDS_OTA_SIGNING_KEY", "")
+    if ota_seed:
+        if not re.match(r"^[0-9A-Fa-f]{64}$", ota_seed):
+            fail("KIDS_OTA_SIGNING_KEY must be 64 hex digits (setup.sh generates it)")
+        ota_pub = _ed.public_key(bytes.fromhex(ota_seed))
+        strings["KIDS_OTA_PUBKEY"] = ota_pub.hex().upper()
+        strings["KIDS_OTA_FAMILY"] = _kfw.family_tag(bytes.fromhex(key), ota_pub).hex().upper()
+    else:
+        print("SpArk: KIDS_OTA_SIGNING_KEY is empty: this SpArkKids build takes no Bluetooth updates")
+    # OTA tests only: SPARK_KIDS_TEST_CODE=<n> builds the same firmware with version code n (and a
+    # "-test<n>" label), so an update to it can be tried without a real version bump.
+    test_code = os.environ.get("SPARK_KIDS_TEST_CODE", "")
+    if test_code:
+        if not test_code.isdigit() or not 0 < int(test_code) < 2**31:
+            fail("SPARK_KIDS_TEST_CODE must be a positive number")
+        flags["KIDS_FW_CODE"] = test_code
+        flags["KIDS_FW_TEST"] = test_code   # KidsApp.h turns it into the label (no spaces in flags here)
+        print("SpArk: TEST build with KIDS_FW_CODE=%s" % test_code)
+
 for k, v in strings.items():
     flags[k] = "'\"%s\"'" % v
 
@@ -231,5 +255,55 @@ if component == "node":
         actions=dfu_zip_action,
         title="Create DFU zip",
         description="adafruit-nrfutil genpkg: application package for BLE OTA",
+        always_build=True,
+    )
+
+
+# ---- SpArkKids signed bundle ---------------------------------------------------------------------
+# `pio run -e SparkKids_TDeckPlus -t kids_ota` -> kids-ota.zip next to firmware.bin: firmware.bin +
+# manifest.json (version code, size, SHA-256, family tag, Ed25519 signature with
+# KIDS_OTA_SIGNING_KEY). A bridge installs it with `spark-bridge kids-firmware install`.
+
+if component == "kids":
+    def _flag_value(name):
+        for f in env.get("BUILD_FLAGS", []):  # noqa: F821
+            m = re.search(r"(?:^|\s)-D\s*%s=(\S+)" % name, f)
+            if m:
+                return m.group(1)
+        return None
+
+    def kids_ota_action(source, target, env):  # noqa: ARG001
+        seed = get("KIDS_OTA_SIGNING_KEY", "")
+        if not seed:
+            fail("KIDS_OTA_SIGNING_KEY is empty: run ./setup.sh (it generates one) before making bundles")
+        code = _flag_value("KIDS_FW_CODE")
+        version = (_flag_value("KIDS_FW_VERSION") or "").strip("'\"")
+        # the version string has spaces, so take it from our own table when we set it
+        if "KIDS_FW_TEST" in flags:
+            version = "SpArkKids-test%s (MeshCore v1.18.0)" % flags["KIDS_FW_TEST"]
+        else:
+            version = _ini_version() or version
+        if not code or not code.isdigit():
+            fail("KIDS_FW_CODE is not set for this environment")
+        fw = env.subst("$BUILD_DIR/firmware.bin")
+        with open(fw, "rb") as f:
+            image = f.read()
+        data = _kfw.make_bundle(image, int(code), version, bytes.fromhex(seed), bytes.fromhex(key))
+        out = env.subst("$BUILD_DIR/kids-ota.zip")
+        with open(out, "wb") as f:
+            f.write(data)
+        print("SpArk: %s (%s, code %s, %d bytes)" % (os.path.relpath(out, ROOT), version, code, len(image)))
+
+    def _ini_version():
+        raw = env.GetProjectOption("build_flags", "")  # noqa: F821
+        m = re.search(r"KIDS_FW_VERSION='\"([^\"]+)\"'", raw if isinstance(raw, str) else " ".join(raw))
+        return m.group(1) if m else None
+
+    env.AddCustomTarget(  # noqa: F821
+        name="kids_ota",
+        dependencies="$BUILD_DIR/firmware.bin",
+        actions=kids_ota_action,
+        title="SpArkKids OTA bundle",
+        description="Signed kids-ota.zip for Bluetooth updates through the bridge",
         always_build=True,
     )

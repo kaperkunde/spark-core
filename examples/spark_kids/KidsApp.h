@@ -13,6 +13,7 @@
 
 #include "KidsLogic.h"
 #include "KidsInput.h"
+#include "KidsOta.h"
 #include "MemberDir.h"
 #include "PublicChannel.h"
 
@@ -48,6 +49,16 @@
 #ifndef KIDS_FW_VERSION
   #define KIDS_FW_VERSION "SpArkKids-dev"
 #endif
+#ifdef KIDS_FW_TEST                  // SPARK_KIDS_TEST_CODE=<n> (spark/pio_env.py): OTA test builds only
+  #define KIDS_STR2(x) #x
+  #define KIDS_STR(x) KIDS_STR2(x)
+  #undef KIDS_FW_VERSION
+  #define KIDS_FW_VERSION "SpArkKids-test" KIDS_STR(KIDS_FW_TEST) " (MeshCore v1.18.0)"
+#endif
+#ifndef KIDS_FW_CODE
+  #define KIDS_FW_CODE 0             // numeric, increases with every release (Bluetooth update compare)
+#endif
+#define OTA_MARK_VALID_MS 20000UL     // a freshly updated image that runs this long is kept
 
 #define LOGIN_REFRESH_MS (10UL * 60 * 1000)    // re-login (keeps the room pushing to us)
 #define MEMBERS_REFRESH_MS (6UL * 3600 * 1000)
@@ -110,14 +121,15 @@ struct Pending {
 };
 
 enum Screen { SCR_NAME, SCR_ROOM, SCR_PEOPLE, SCR_THREAD, SCR_PIN, SCR_SETTINGS, SCR_RENAME, SCR_CONFIRM,
-              SCR_TOUCHCAL, SCR_MENU, SCR_PUBLIC };
+              SCR_TOUCHCAL, SCR_MENU, SCR_PUBLIC, SCR_UPDATE };
 
 static const uint8_t ZERO6[6] = { 0, 0, 0, 0, 0, 0 };
 static const uint8_t PUBLIC6[6] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };   // peer marker of Public posts
 
 // touch targets registered while drawing
 enum HitId : uint8_t { H_BACK = 1, H_PEOPLE, H_SEND, H_OK, H_CANCEL, H_SAVE, H_ROW, H_AUTHOR, H_FAILED, H_NEWPILL,
-                       H_YES, H_NO, H_VOL_DOWN, H_VOL_UP, H_GEAR, H_MENU_NAME, H_MENU_PARENT, H_DIGIT, H_DEL };
+                       H_YES, H_NO, H_VOL_DOWN, H_VOL_UP, H_GEAR, H_MENU_NAME, H_MENU_PARENT, H_DIGIT, H_DEL,
+                       H_INSTALL, H_LATER };
 enum MembersState : uint8_t { MEMBERS_UNKNOWN, MEMBERS_OK, MEMBERS_FAILED };
 struct Hit { int16_t x, y, w, h; uint8_t id; int16_t arg; };
 #define MAX_HITS 24
@@ -223,6 +235,11 @@ private:
   int16_t _cal_dot_x, _cal_dot_y;
   const char* _cal_msg;
 
+  // Bluetooth update
+  KidsOta _ota;
+  Screen _update_back;        // where the update screen returns to
+  bool _ota_valid_done;
+
   // persistence
   void loadPrefs(); void savePrefs();
   void loadPeople(); void savePeople();
@@ -298,7 +315,10 @@ private:
   void drawPrompt(const char* line1, const char* line2, const char* hint);
   void drawConfirm();
   void drawTouchCal();
-  int settingsRows() const { return 14; }
+  void drawUpdate();
+  void otaLoop();
+  void saveAllNow();
+  int settingsRows() const { return 15; }
   void settingsRow(int i, char* label, char* value);
   void settingsClick(int i);
   void settingsSave(int i, const char* v);

@@ -339,4 +339,116 @@ void nameTag(const char* name, uint8_t* tag4) {
   if (tag4[0] == 0 && tag4[1] == 0 && tag4[2] == 0 && tag4[3] == 0) tag4[0] = 1;
 }
 
+
+// --- kids OTA ---------------------------------------------------------------------------
+
+namespace ota {
+
+static void put32(uint8_t* p, uint32_t v) { p[0] = v; p[1] = v >> 8; p[2] = v >> 16; p[3] = v >> 24; }
+static uint32_t get32(const uint8_t* p) {
+  return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+}
+
+bool parseOffer(const uint8_t* b, size_t n, Offer& o) {
+  memset(&o, 0, sizeof(o));
+  if (n < (size_t)OFFER_LEN || n > (size_t)(OFFER_LEN + LABEL_MAX) || b[0] != CMD_OFFER) return false;
+  o.code = get32(b + 1);
+  o.size = get32(b + 5);
+  memcpy(o.sha, b + 9, 32);
+  memcpy(o.sig, b + 41, 64);
+  size_t l = n - OFFER_LEN;
+  for (size_t i = 0; i < l; i++) {
+    char ch = (char)b[OFFER_LEN + i];
+    o.label[i] = (ch >= 0x20 && ch < 0x7F) ? ch : '?';
+  }
+  o.label[l] = 0;
+  return true;
+}
+
+void signedMessage(uint8_t* out, uint32_t code, uint32_t size, const uint8_t* sha) {
+  memcpy(out, "SPARK-KIDS-OTA-1", 16);
+  put32(out + 16, code);
+  put32(out + 20, size);
+  memcpy(out + 24, sha, 32);
+}
+
+uint8_t checkOffer(const Offer& o, uint32_t my_code, uint32_t slot_size) {
+  if (o.size < 1024) return R_BAD_OFFER;
+  if (o.size > slot_size) return R_TOO_BIG;
+  if (o.code <= my_code) return R_NOT_NEWER;
+  return R_NONE;
+}
+
+bool batteryOk(uint16_t mv, bool usb) { return usb || mv >= MIN_BATT_MV; }
+
+uint32_t snoozeLeft(uint32_t until, uint32_t now) {
+  if (until <= now) return 0;
+  uint32_t left = until - now;
+  return left > SNOOZE_SECS ? SNOOZE_SECS : left;
+}
+
+size_t encodeAdvert(uint8_t* out, const uint8_t* family4, uint32_t code, uint8_t flags) {
+  out[0] = 'S'; out[1] = 'K'; out[2] = PROTO;
+  memcpy(out + 3, family4, 4);
+  put32(out + 7, code);
+  out[11] = flags;
+  return ADVERT_LEN;
+}
+
+size_t encodeState(uint8_t* out, uint8_t state, uint8_t reason, uint32_t value) {
+  out[0] = NTF_STATE; out[1] = state; out[2] = reason;
+  put32(out + 3, value);
+  return 7;
+}
+
+size_t encodeOffset(uint8_t* out, uint8_t op, uint32_t offset) {
+  out[0] = op;
+  put32(out + 1, offset);
+  return 5;
+}
+
+size_t encodeStatus(uint8_t* out, size_t cap, uint32_t code, uint8_t flags, uint32_t snooze, uint16_t mv,
+                    const char* label) {
+  if (cap < (size_t)STATUS_LEN) return 0;
+  out[0] = PROTO;
+  put32(out + 1, code);
+  out[5] = flags;
+  put32(out + 6, snooze);
+  out[10] = mv; out[11] = mv >> 8;
+  size_t n = STATUS_LEN;
+  for (const char* p = label; p && *p && n < cap && n < (size_t)(STATUS_LEN + LABEL_MAX); p++) out[n++] = (uint8_t)*p;
+  return n;
+}
+
+void shortLabel(const char* version, char* out, size_t cap) {
+  size_t n = 0;
+  while (version[n] && version[n] != ' ' && n + 1 < cap && n < (size_t)LABEL_MAX) { out[n] = version[n]; n++; }
+  out[n] = 0;
+}
+
+const char* reasonText(uint8_t r) {
+  switch (r) {
+    case R_NOT_NEWER: return "not newer";
+    case R_BAD_SIGNATURE: return "bad signature";
+    case R_TOO_BIG: return "too big";
+    case R_LOW_BATTERY: return "battery low";
+    case R_BAD_OFFER: return "bad offer";
+    case R_HASH_MISMATCH: return "image damaged";
+    case R_FLASH_ERROR: return "flash error";
+    case R_ABORTED: return "connection lost";
+    case R_DISABLED: return "updates off";
+    case R_TIMEOUT: return "timed out";
+    default: return "";
+  }
+}
+
+RxResult rxCheck(uint32_t next, uint32_t size, uint32_t offset, uint32_t len) {
+  if (offset < next) return offset + len <= next ? RX_DUP : RX_GAP;   // partial overlap: resend from next
+  if (offset > next) return RX_GAP;
+  if (len == 0 || offset + len > size) return RX_OVERRUN;
+  return RX_OK;
+}
+
+}  // namespace ota
+
 }  // namespace kids
