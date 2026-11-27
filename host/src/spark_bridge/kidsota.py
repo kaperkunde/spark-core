@@ -137,7 +137,11 @@ class Session:
         ev = await self.next_state(15.0)
         if ev.state == kf.ST_PROMPT:
             self.say(f"offered {self.bundle.label}: waiting for Install / Later on the unit")
-            ev = await self.next_state(self.prompt_wait)
+            try:
+                ev = await self.next_state(self.prompt_wait)
+            except OtaError:   # nobody tapped: close the prompt, try again later
+                await self.client.write_gatt_char(kf.CTRL_UUID, bytes([kf.CMD_ABORT]), response=True)
+                return kf.Event(kf.NTF_STATE, kf.ST_NOANSWER, kf.R_TIMEOUT)
         if ev.state != kf.ST_READY:
             return ev
         self.say("Install tapped: sending the image")
@@ -217,7 +221,7 @@ def pick(units: list[Unit], bundle: kf.Bundle, policy: kf.OfferPolicy, now: floa
 
 
 async def scan_and_offer(bundle: kf.Bundle, policy: kf.OfferPolicy, *, adapter: str = "",
-                         scan_seconds: float = 10.0, address: str = "", say=log.info,
+                         scan_seconds: float = 20.0, address: str = "", say=log.info,
                          prompt_wait: float = 150.0, clock=time.time) -> list[tuple[str, str]]:
     """One round. Returns [(address, outcome)] for the units it talked to."""
     units = await scan_units(scan_seconds, adapter)
@@ -360,7 +364,7 @@ def update_main(argv: list[str]) -> int:
     ap.add_argument("--bundle", default="", help="offer this bundle file instead of the installed one")
     ap.add_argument("--once", action="store_true", help="one scan round, then exit")
     ap.add_argument("--address", default="", help="only this unit (BLE address / macOS UUID)")
-    ap.add_argument("--scan-seconds", type=float, default=10.0)
+    ap.add_argument("--scan-seconds", type=float, default=20.0, help="scan time (macOS scans slowly while it holds other links)")
     ap.add_argument("--interval-minutes", type=float, default=5.0, help="without --once: time between rounds")
     ap.add_argument("--prompt-wait", type=float, default=150.0, help="how long to wait for a tap on the unit")
     ap.add_argument("--list", action="store_true", help="only list the kids units seen, offer nothing")

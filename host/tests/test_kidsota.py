@@ -256,6 +256,9 @@ class FakeUnit:
 
     async def write_gatt_char(self, uuid, data, response=False):
         data = bytes(data)
+        if uuid == kf.CTRL_UUID and data[0] == kf.CMD_ABORT:
+            self.aborted = True
+            return None
         if uuid == kf.CTRL_UUID:
             code, size = struct.unpack_from("<II", data, 1)
             sha, sig = data[9:41], data[41:105]
@@ -267,6 +270,8 @@ class FakeUnit:
             self.state(kf.ST_PROMPT, 0, 120)
             if self.decision == "install":
                 self.state(kf.ST_READY)
+            elif self.decision == "silent":
+                pass
             elif self.decision == "later":
                 self.state(kf.ST_SNOOZED, 0, kf.SNOOZE_SECS)
             return None
@@ -317,3 +322,11 @@ async def test_session_later_and_foreign_key():
     assert ev.state == kf.ST_REFUSED and ev.reason == kf.R_BAD_SIGNATURE
     ev = await Session(FakeUnit("install", my_code=102), b, say=lambda m: None).run()
     assert ev.reason == kf.R_NOT_NEWER
+
+
+async def test_session_no_tap_aborts_the_prompt():
+    b = kf.parse_bundle(bundle_bytes(102))
+    unit = FakeUnit("silent")
+    ev = await Session(unit, b, say=lambda m: None, prompt_wait=0.2).run()
+    assert ev.state == kf.ST_NOANSWER and getattr(unit, "aborted", False)
+    assert kf.outcome_for(ev)[0] == "noanswer"
